@@ -19,6 +19,10 @@ export interface LinkedInAccount {
   profile_url?: string;
   is_active: boolean;
   created_at: string;
+  /** Connection requests sent today (computed at query time, not stored) */
+  daily_invites_sent: number;
+  /** Daily connection-request cap for this account (from campaign settings) */
+  daily_limit: number;
 }
 
 export interface TimeWindow {

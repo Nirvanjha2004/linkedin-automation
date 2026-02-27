@@ -1,8 +1,15 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
+import { isValidCronRequest, cronUnauthorized } from '@/lib/cron-auth';
 
 const MIN_DELAY_MS = 30 * 1000;
 const MAX_DELAY_MS = 90 * 1000;
+
+/**
+ * LinkedIn's rolling daily connection-request limit per account.
+ * Accounts can be restricted if this is exceeded — keep it conservative.
+ */
+const DEFAULT_DAILY_CONNECTION_LIMIT = 20;
 
 function randomDelayMs(): number {
   return Math.floor(Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS + 1)) + MIN_DELAY_MS;
@@ -11,6 +18,14 @@ function randomDelayMs(): number {
 /** Returns ISO timestamp for N days ago */
 function daysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/** Returns ISO timestamp for the start of today (midnight UTC) */
+function startOfTodayUTC(): string {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  ).toISOString();
 }
 
 type Campaign = {
@@ -44,7 +59,8 @@ type QueueAction = {
  *  3. message_sent lead    → send_followup_1   (after follow_up_delay_days)
  *  4. followup_1_sent lead → send_followup_2   (after follow_up_delay_days)
  */
-export async function POST() {
+export async function POST(request: NextRequest) {
+  if (!isValidCronRequest(request)) return cronUnauthorized();
   const supabase = createAdminClient();
 
   try {
@@ -123,15 +139,42 @@ export async function POST() {
 
         const campaignIds = accountCampaigns.map((c) => c.id);
 
-        // 5. Find the highest-priority action to queue
-        const action = await findNextAction(supabase, account, accountCampaigns, campaignIds);
+        // 5. Count connection_request actions already completed today for this account
+        //    (real-time count — no stale counter, no reset cron required)
+        const todayStart = startOfTodayUTC();
+        const { count: connectionsSentToday } = await supabase
+          .from('action_queue')
+          .select('id', { count: 'exact', head: true })
+          .eq('account_id', account.id)
+          .eq('type', 'connection_request')
+          .eq('status', 'completed')
+          .gte('executed_at', todayStart);
+
+        // Daily limit = lowest daily_limit across the account's active campaigns,
+        // falling back to the platform default (20) if not configured.
+        const dailyLimit = accountCampaigns.reduce(
+          (min, c) => Math.min(min, c.daily_limit ?? DEFAULT_DAILY_CONNECTION_LIMIT),
+          DEFAULT_DAILY_CONNECTION_LIMIT
+        );
+
+        const dailyLimitReached = (connectionsSentToday ?? 0) >= dailyLimit;
+
+        // 6. Find the highest-priority action to queue
+        const action = await findNextAction(
+          supabase,
+          account,
+          accountCampaigns,
+          campaignIds,
+          dailyLimitReached,
+        );
 
         if (!action) {
-          results.push({ accountId: account.id, status: 'skipped', reason: 'nothing_to_do' });
+          const reason = dailyLimitReached ? `daily_limit_reached (${connectionsSentToday ?? 0}/${dailyLimit})` : 'nothing_to_do';
+          results.push({ accountId: account.id, status: 'skipped', reason });
           continue;
         }
 
-        // 6. Atomically claim the lead (prevents double-queuing on concurrent runs)
+        // 7. Atomically claim the lead (prevents double-queuing on concurrent runs)
         const { error: claimError } = await supabase
           .from('leads')
           .update({ status: 'processing' })
@@ -143,7 +186,7 @@ export async function POST() {
           continue;
         }
 
-        // 7. Insert into action_queue
+        // 8. Insert into action_queue
         const { error: queueError } = await supabase
           .from('action_queue')
           .insert({
@@ -188,6 +231,10 @@ export async function POST() {
 /**
  * Finds the highest-priority action for an account.
  * Priority: connection_request > send_message > send_followup_1 > send_followup_2
+ *
+ * @param dailyLimitReached - When true, Priority 1 (connection_request) is
+ *   skipped entirely so the scheduler can still process messages/followups
+ *   even after the daily connection cap is hit.
  */
 async function findNextAction(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -195,31 +242,36 @@ async function findNextAction(
   account: { id: string; unipile_account_id: string },
   campaigns: Campaign[],
   campaignIds: string[],
+  dailyLimitReached: boolean,
 ): Promise<QueueAction | null> {
 
   // ── Priority 1: pending → connection_request ──────────────────────────────
-  const { data: pendingLead } = await supabase
-    .from('leads')
-    .select('id, linkedin_url, campaign_id')
-    .in('campaign_id', campaignIds)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  // Skipped when the account has already hit its daily connection-request cap.
+  // Messages and follow-ups are NOT subject to this cap.
+  if (!dailyLimitReached) {
+    const { data: pendingLead } = await supabase
+      .from('leads')
+      .select('id, linkedin_url, campaign_id')
+      .in('campaign_id', campaignIds)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
 
-  if (pendingLead) {
-    const campaign = campaigns.find((c) => c.id === pendingLead.campaign_id);
-    return {
-      type: 'connection_request',
-      leadId: pendingLead.id,
-      campaignId: pendingLead.campaign_id,
-      fromStatus: 'pending',
-      payload: {
-        linkedin_url: pendingLead.linkedin_url,
-        unipile_account_id: account.unipile_account_id,
-        message: campaign?.message_templates?.connection_request ?? null,
-      },
-    };
+    if (pendingLead) {
+      const campaign = campaigns.find((c) => c.id === pendingLead.campaign_id);
+      return {
+        type: 'connection_request',
+        leadId: pendingLead.id,
+        campaignId: pendingLead.campaign_id,
+        fromStatus: 'pending',
+        payload: {
+          linkedin_url: pendingLead.linkedin_url,
+          unipile_account_id: account.unipile_account_id,
+          message: campaign?.message_templates?.connection_request ?? null,
+        },
+      };
+    }
   }
 
   // ── Priority 2: connected → send_message (initial message, immediate) ─────
@@ -319,6 +371,7 @@ async function findNextAction(
   return null;
 }
 
-export async function GET() {
-  return NextResponse.json({ status: 'scheduler_v2_ready', timestamp: new Date().toISOString() });
+// Vercel Cron Jobs send GET requests — delegate to the POST handler
+export async function GET(request: NextRequest) {
+  return POST(request);
 }

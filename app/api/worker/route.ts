@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { getUnipileClient, LeadProfileData } from '@/lib/unipile/client';
+import { isValidCronRequest, cronUnauthorized } from '@/lib/cron-auth';
 
 /** Replaces {{first_name}}, {{last_name}}, {{full_name}}, {{company}}, {{title}} in a template */
 function personalize(template: string, lead: Record<string, string | null | undefined>): string {
@@ -25,7 +26,8 @@ const MESSAGE_STATUS_MAP: Record<MessageActionType, { status: string; timestampF
 // POST /api/worker
 // Polls action_queue every 30 seconds for ready actions and executes them immediately.
 // No sleep delays — timing is handled by the scheduler.
-export async function POST() {
+export async function POST(request: NextRequest) {
+  if (!isValidCronRequest(request)) return cronUnauthorized();
   const supabase = createAdminClient();
   const unipile = getUnipileClient();
   const currentTime = new Date();
@@ -257,6 +259,7 @@ async function enrichLead(supabase: any, leadId: string, profile: LeadProfileDat
   }
 }
 
-export async function GET() {
-  return NextResponse.json({ status: 'worker_ready', timestamp: new Date().toISOString() });
+// Vercel Cron Jobs send GET requests — delegate to the POST handler
+export async function GET(request: NextRequest) {
+  return POST(request);
 }

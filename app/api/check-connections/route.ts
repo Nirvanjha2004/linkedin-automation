@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { getUnipileClient } from '@/lib/unipile/client';
+import { isValidCronRequest, cronUnauthorized } from '@/lib/cron-auth';
 
 /**
  * POST /api/check-connections
@@ -13,7 +14,8 @@ import { getUnipileClient } from '@/lib/unipile/client';
  *
  * Run via cron every 20 minutes.
  */
-export async function POST() {
+export async function POST(request: NextRequest) {
+  if (!isValidCronRequest(request)) return cronUnauthorized();
   const supabase = createAdminClient();
   const unipile = getUnipileClient();
   const currentTime = new Date();
@@ -66,7 +68,7 @@ export async function POST() {
           results.push({ accountId: account.id, checked: 0, accepted: 0, error: relationsResult.error });
           continue;
         }
-        console.log("The relations result are : ", relationsResult.data)
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const relations: any[] = relationsResult.data?.items ?? relationsResult.data?.relations ?? [];
         if (!relations.length) {
@@ -77,7 +79,7 @@ export async function POST() {
         // 5. Build a Set of provider_ids from relations — O(1) lookup
         const connectedIds = new Set<string>(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          relations.map((r: any) => r.member_id).filter(Boolean)
+          relations.map((r: any) => r.provider_id).filter(Boolean)
         );
 
         // 6. Cross-reference in memory — no extra API calls
@@ -135,6 +137,7 @@ export async function POST() {
   }
 }
 
-export async function GET() {
-  return NextResponse.json({ status: 'check_connections_ready', timestamp: new Date().toISOString() });
+// Vercel Cron Jobs send GET requests — delegate to the POST handler
+export async function GET(request: NextRequest) {
+  return POST(request);
 }
