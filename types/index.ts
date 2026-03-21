@@ -13,7 +13,10 @@ export interface User {
 export interface LinkedInAccount {
   id: string;
   user_id: string;
-  unipile_account_id: string;
+  /** @deprecated Unipile-era field — replaced by li_at / jsessionid / profile_urn */
+  unipile_account_id?: string;
+  /** fsd_profile URN — server-side only, not returned to the browser */
+  profile_urn?: string;
   name: string;
   email?: string;
   profile_url?: string;

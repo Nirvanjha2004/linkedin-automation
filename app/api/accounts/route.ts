@@ -1,6 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { getUnipileClient } from '@/lib/unipile/client';
 
 /** Platform default — matches the constant in scheduler-v2 */
 const DEFAULT_DAILY_CONNECTION_LIMIT = 20;
@@ -82,46 +81,10 @@ export async function GET() {
   }
 }
 
-// POST /api/accounts - Create/sync a LinkedIn account manually
-export async function POST(request: NextRequest) {
-  try {
-    const supabase = await createClient();
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const body = await request.json();
-    const { unipile_account_id, name } = body;
-
-    if (!unipile_account_id || !name) {
-      return NextResponse.json({ error: 'unipile_account_id and name are required' }, { status: 400 });
-    }
-
-    // Verify the account exists in Unipile
-    const unipile = getUnipileClient();
-    const accountInfo = await unipile.fetchAccountById(unipile_account_id);
-
-    const { data: account, error } = await supabase
-      .from('linkedin_accounts')
-      .upsert({
-        user_id: user.id,
-        unipile_account_id,
-        name,
-        email: (accountInfo.data as Record<string, unknown>)?.email as string || null,
-        profile_url: (accountInfo.data as Record<string, unknown>)?.linkedin_url as string || null,
-        is_active: true,
-      }, {
-        onConflict: 'user_id,unipile_account_id',
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return NextResponse.json({ account }, { status: 201 });
-  } catch (err: unknown) {
-    const error = err as Error;
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+// POST /api/accounts — deprecated. Use POST /api/accounts/connect instead.
+export async function POST() {
+  return NextResponse.json(
+    { error: 'deprecated', message: 'Use POST /api/accounts/connect with your li_at cookie instead.' },
+    { status: 410 }
+  );
 }

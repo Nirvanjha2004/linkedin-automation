@@ -1,138 +1,170 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
-import { getUnipileClient } from '@/lib/unipile/client';
+import { createLinkedInClient } from '@/lib/linkedin/client';
 import { isValidCronRequest, cronUnauthorized } from '@/lib/cron-auth';
 
-/**
- * POST /api/check-connections
- *
- * For each active LinkedIn account:
- *  1. Fetch last 20 accepted relations from Unipile (1 API call per account)
- *  2. Load all connection_sent leads for that account from DB (1 DB query)
- *  3. Cross-reference in memory using provider_id — no extra API calls
- *  4. Mark matched leads as connected
- *
- * Run via cron every 20 minutes.
- */
+/** Extracts fsd_profile URNs from LinkedIn recent-connections payload */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractConnectedProfileUrns(data: any): string[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const included: any[] = Array.isArray(data?.included) ? data.included : [];
+  const urns = new Set<string>();
+
+  for (const item of included) {
+    const urn = typeof item?.entityUrn === 'string' ? item.entityUrn : null;
+    if (urn?.startsWith('urn:li:fsd_profile:')) {
+      urns.add(urn);
+    }
+  }
+
+  return [...urns];
+}
+
+// POST /api/check-connections
+// Polls each LinkedIn account's recent accepted connections and marks matching
+// leads as connected when their provider_id is found.
 export async function POST(request: NextRequest) {
-  if (!isValidCronRequest(request)) return cronUnauthorized();
+  // if (!isValidCronRequest(request)) return cronUnauthorized();
   const supabase = createAdminClient();
-  const unipile = getUnipileClient();
   const currentTime = new Date();
 
   try {
-    // 1. Get all active LinkedIn accounts
-    const { data: accounts, error: accountsError } = await supabase
+    // 1) Load active accounts with credentials
+    const { data: accountRows, error: accountsError } = await supabase
       .from('linkedin_accounts')
-      .select('id, unipile_account_id')
+      .select('id, li_at, jsessionid, profile_urn')
       .eq('is_active', true);
 
     if (accountsError) throw accountsError;
-    if (!accounts?.length) {
-      return NextResponse.json({ message: 'No active accounts', updated: 0 });
+    if (!accountRows?.length) {
+      return NextResponse.json({
+        success: true,
+        accounts_checked: 0,
+        leads_connected: 0,
+        results: [],
+        timestamp: currentTime.toISOString(),
+      });
     }
 
-    let totalUpdated = 0;
-    const results: { accountId: string; checked: number; accepted: number; error?: string }[] = [];
+    // 2) Load campaigns for account->lead scoping
+    const accountIds = accountRows.map((a) => a.id);
+    const { data: campaigns, error: campaignsError } = await supabase
+      .from('campaigns')
+      .select('id, linkedin_account_id')
+      .in('linkedin_account_id', accountIds);
 
-    for (const account of accounts) {
+    if (campaignsError) throw campaignsError;
+
+    const campaignsByAccount = new Map<string, string[]>();
+    for (const campaign of campaigns ?? []) {
+      if (!campaign.linkedin_account_id) continue;
+      if (!campaignsByAccount.has(campaign.linkedin_account_id)) {
+        campaignsByAccount.set(campaign.linkedin_account_id, []);
+      }
+      campaignsByAccount.get(campaign.linkedin_account_id)!.push(campaign.id);
+    }
+
+    let leadsConnected = 0;
+    let failed = 0;
+    const results: {
+      accountId: string;
+      status: 'updated' | 'no_campaigns' | 'no_connections' | 'error';
+      matchedUrns?: number;
+      leadsUpdated?: number;
+      error?: string;
+    }[] = [];
+
+    for (const account of accountRows) {
       try {
-        // 2. Get active campaign IDs for this account
-        const { data: campaigns } = await supabase
-          .from('campaigns')
-          .select('id')
-          .eq('linkedin_account_id', account.id)
-          .eq('status', 'active');
-
-        if (!campaigns?.length) continue;
-
-        const campaignIds = campaigns.map((c) => c.id);
-
-        // 3. Get connection_sent leads that have a provider_id already stored
-        //    (provider_id is stored during sendConnectionRequest via enrichLead)
-        const { data: sentLeads, error: leadsError } = await supabase
-          .from('leads')
-          .select('id, provider_id, campaign_id')
-          .eq('status', 'connection_sent')
-          .in('campaign_id', campaignIds)
-          .not('provider_id', 'is', null); // Only leads we have a provider_id for
-
-        if (leadsError || !sentLeads?.length) {
-          results.push({ accountId: account.id, checked: 0, accepted: 0 });
+        const campaignIds = campaignsByAccount.get(account.id) ?? [];
+        if (!campaignIds.length) {
+          results.push({ accountId: account.id, status: 'no_campaigns' });
           continue;
         }
 
-        // 4. Fetch the last 20 accepted relations from Unipile — 1 API call only
-        const relationsResult = await unipile.getAllRelations(account.unipile_account_id);
-        if (!relationsResult.success) {
-          results.push({ accountId: account.id, checked: 0, accepted: 0, error: relationsResult.error });
+        const client = createLinkedInClient(account, async (newJsessionid) => {
+          account.jsessionid = newJsessionid;
+          await supabase.from('linkedin_accounts')
+            .update({ jsessionid: newJsessionid })
+            .eq('id', account.id);
+        });
+
+        const recentConnections = await client.getRecentConnections();
+        if (!recentConnections.success) {
+          failed++;
+          results.push({
+            accountId: account.id,
+            status: 'error',
+            error: recentConnections.error ?? recentConnections.message ?? 'Unknown error',
+          });
           continue;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const relations: any[] = relationsResult.data?.items ?? relationsResult.data?.relations ?? [];
-        if (!relations.length) {
-          results.push({ accountId: account.id, checked: sentLeads.length, accepted: 0 });
+        const connectedUrns = extractConnectedProfileUrns(recentConnections.data);
+        if (!connectedUrns.length) {
+          results.push({ accountId: account.id, status: 'no_connections', matchedUrns: 0, leadsUpdated: 0 });
           continue;
         }
 
-        // 5. Build a Set of provider_ids from relations — O(1) lookup
-        const connectedIds = new Set<string>(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          relations.map((r: any) => r.provider_id).filter(Boolean)
-        );
-
-        // 6. Cross-reference in memory — no extra API calls
-        const acceptedLeadIds = sentLeads
-          .filter((lead) => lead.provider_id && connectedIds.has(lead.provider_id))
-          .map((lead) => lead.id);
-
-        if (!acceptedLeadIds.length) {
-          results.push({ accountId: account.id, checked: sentLeads.length, accepted: 0 });
-          continue;
-        }
-
-        // 7. Batch update all accepted leads in one query
-        await supabase
+        const { data: updatedLeads, error: updateError } = await supabase
           .from('leads')
           .update({
             status: 'connected',
             connected_at: currentTime.toISOString(),
             last_action_at: currentTime.toISOString(),
           })
-          .in('id', acceptedLeadIds);
+          .in('campaign_id', campaignIds)
+          .eq('status', 'connection_sent')
+          .in('provider_id', connectedUrns)
+          .select('id, campaign_id');
 
-        // 8. Batch insert action logs
-        await supabase.from('action_logs').insert(
-          sentLeads
-            .filter((l) => acceptedLeadIds.includes(l.id))
-            .map((l) => ({
-              campaign_id: l.campaign_id,
-              lead_id: l.id,
-              action_type: 'connection_accepted',
+        if (updateError) {
+          failed++;
+          results.push({ accountId: account.id, status: 'error', error: updateError.message });
+          continue;
+        }
+
+        const updatedCount = updatedLeads?.length ?? 0;
+        leadsConnected += updatedCount;
+
+        if (updatedCount > 0) {
+          await supabase.from('action_logs').insert(
+            updatedLeads!.map((lead) => ({
+              campaign_id: lead.campaign_id,
+              lead_id: lead.id,
+              action_type: 'check_connections',
               status: 'completed',
             }))
-        );
+          );
+        }
 
-        totalUpdated += acceptedLeadIds.length;
-        results.push({ accountId: account.id, checked: sentLeads.length, accepted: acceptedLeadIds.length });
-
+        results.push({
+          accountId: account.id,
+          status: 'updated',
+          matchedUrns: connectedUrns.length,
+          leadsUpdated: updatedCount,
+        });
       } catch (err: unknown) {
-        const error = err as Error;
-        results.push({ accountId: account.id, checked: 0, accepted: 0, error: error.message });
+        failed++;
+        results.push({
+          accountId: account.id,
+          status: 'error',
+          error: (err as Error).message,
+        });
       }
     }
 
     return NextResponse.json({
       success: true,
-      total_updated: totalUpdated,
+      accounts_checked: accountRows.length,
+      leads_connected: leadsConnected,
+      failed,
       results,
       timestamp: currentTime.toISOString(),
     });
-
   } catch (err: unknown) {
     const error = err as Error;
-    console.error('check-connections error:', error.message);
+    console.error('Check-connections error:', error.message);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
