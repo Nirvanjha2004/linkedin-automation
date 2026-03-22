@@ -122,6 +122,19 @@ export default function MessagesInbox() {
   const conversationsRef = useRef<ConversationSummary[]>([]);
   const activeConversationRef = useRef<ConversationDetails | null>(null);
   const queryKeyRef = useRef<string>('');
+  
+  // Ref for auto-scrolling to the bottom of the chat
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Sort messages chronologically (oldest first)
+  const sortedMessages = useMemo(() => {
+    return [...messages].sort((a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime());
+  }, [messages]);
+
+  // Auto-scroll to the bottom whenever messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [sortedMessages]);
 
   useEffect(() => {
     conversationsRef.current = conversations;
@@ -422,44 +435,48 @@ export default function MessagesInbox() {
                   <div className="h-full flex items-center justify-center">
                     <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
                   </div>
-                ) : messages.length === 0 ? (
+                ) : sortedMessages.length === 0 ? (
                   <p className="text-sm text-gray-500">No messages yet.</p>
                 ) : (
-                  messages.map((message) => {
-                    const outbound =
-                      message.direction === 'outbound' ||
-                      message.sender_type === 'linkedin_account';
-                    const senderLabel = outbound ? activeConversation.account.name || 'You' : activeConversation.lead.name;
-                    return (
-                      <div
-                        key={message.id}
-                        className={`flex flex-col ${outbound ? 'items-end' : 'items-start'}`}
-                      >
-                        <p className={`mb-1 text-[11px] font-medium ${outbound ? 'text-blue-600' : 'text-gray-500'}`}>
-                          {outbound ? 'You' : senderLabel}
-                        </p>
+                  <>
+                    {sortedMessages.map((message) => {
+                      const outbound =
+                        message.direction === 'outbound' ||
+                        message.sender_type === 'linkedin_account';
+                      const senderLabel = outbound ? activeConversation.account.name || 'You' : activeConversation.lead.name;
+                      return (
                         <div
-                          className={`max-w-[82%] rounded-xl px-3.5 py-2.5 shadow-sm border ${
-                            outbound
-                              ? 'bg-blue-600 border-blue-600 text-white rounded-br-sm'
-                              : 'bg-white border-gray-200 text-gray-800 rounded-bl-sm'
-                          }`}
+                          key={message.id}
+                          className={`flex flex-col ${outbound ? 'items-end' : 'items-start'}`}
                         >
-                          {message.content_html ? (
-                            <div
-                              className="text-sm leading-relaxed break-words [overflow-wrap:anywhere]"
-                              dangerouslySetInnerHTML={{ __html: message.content_html }}
-                            />
-                          ) : (
-                            <p className="text-sm leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content_text}</p>
-                          )}
-                          <p className={`mt-1 text-[11px] ${outbound ? 'text-blue-100' : 'text-gray-400'}`}>
-                            {formatDateTime(message.sent_at)}
+                          <p className={`mb-1 text-[11px] font-medium ${outbound ? 'text-blue-600' : 'text-gray-500'}`}>
+                            {outbound ? 'You' : senderLabel}
                           </p>
+                          <div
+                            className={`max-w-[82%] rounded-xl px-3.5 py-2.5 shadow-sm border ${
+                              outbound
+                                ? 'bg-blue-600 border-blue-600 text-white rounded-br-sm'
+                                : 'bg-white border-gray-200 text-gray-800 rounded-bl-sm'
+                            }`}
+                          >
+                            {message.content_html ? (
+                              <div
+                                className="text-sm leading-relaxed break-words [overflow-wrap:anywhere]"
+                                dangerouslySetInnerHTML={{ __html: message.content_html }}
+                              />
+                            ) : (
+                              <p className="text-sm leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content_text}</p>
+                            )}
+                            <p className={`mt-1 text-[11px] ${outbound ? 'text-blue-100' : 'text-gray-400'}`}>
+                              {formatDateTime(message.sent_at)}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })
+                      );
+                    })}
+                    {/* Auto-scroll target */}
+                    <div ref={messagesEndRef} />
+                  </>
                 )}
               </div>
 

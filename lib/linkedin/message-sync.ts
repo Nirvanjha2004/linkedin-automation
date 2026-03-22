@@ -56,7 +56,7 @@ function normalizeProfileUrn(value: string | null | undefined): string | null {
     }
   }
 
-  // ✅ FIXED: Strip both known messaging wrappers
+  // ✅ Strip both known messaging wrappers
   if (urn.startsWith('urn:li:msg_messagingParticipant:')) {
     urn = urn.replace('urn:li:msg_messagingParticipant:', '');
   }
@@ -106,7 +106,6 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-// ✅ FIXED: Added 'visited' Set to prevent stack overflows from circular references
 function collectObjects(
   value: unknown,
   predicate: (obj: Record<string, unknown>) => boolean,
@@ -129,7 +128,6 @@ function collectObjects(
   }
 }
 
-// ✅ FIXED: Added 'visited' Set to prevent stack overflows from circular references
 function collectStringsByPrefix(
   value: unknown, 
   prefix: string, 
@@ -224,9 +222,7 @@ function pickMessageText(obj: Record<string, unknown>): string | null {
   );
   if (direct) return direct;
 
-  // Fallback: some payload variants keep text nested in render/content unions.
   const nestedCandidates: string[] = [];
-
   const renderContentUnions = (obj.renderContentUnions as unknown[]) ?? [];
   for (const item of renderContentUnions) {
     if (typeof item === 'object' && item !== null) {
@@ -320,8 +316,15 @@ function parseMessagePayload(payload: unknown, accountProfileUrn: string): Parse
 
     if (!text.trim()) continue;
 
+    const messageObj = obj.message as Record<string, unknown> | undefined;
+    
     const sentAt =
+      toIsoDate(obj.deliveredAt) ||
       toIsoDate(obj.createdAt) ||
+      toIsoDate(obj.time) ||
+      toIsoDate(obj.timestamp) ||
+      toIsoDate(messageObj?.createdAt) ||
+      toIsoDate(messageObj?.time) ||
       toIsoDate(obj.sentAt) ||
       toIsoDate(obj.lastModifiedAt) ||
       new Date().toISOString();
@@ -330,21 +333,17 @@ function parseMessagePayload(payload: unknown, accountProfileUrn: string): Parse
     collectStringsByPrefix(obj, 'urn:li:fsd_profile:', profileUrns);
     collectStringsByPrefix(obj, 'urn:li:member:', profileUrns);
     collectStringsByPrefix(obj, 'urn:li:fs_miniProfile:', profileUrns);
-    // ✅ Catch the wrapper globally if it's the only place the ID exists
     collectStringsByPrefix(obj, 'urn:li:msg_messagingParticipant:', profileUrns);
     collectStringsByPrefix(obj, 'urn:li:messagingMember:', profileUrns);
 
-    // ✅ FIXED: Scope the search to the sender object first to prevent grabbing the lead's URN
     const senderData = obj.sender ?? obj.from;
     const senderProfileUrnRaw =
       (senderData as { entityUrn?: string } | undefined)?.entityUrn ||
-      // ✅ Look for the new prefixes here first
       findFirstStringByPrefix(senderData, 'urn:li:msg_messagingParticipant:') ||
       findFirstStringByPrefix(senderData, 'urn:li:messagingMember:') ||
       findFirstStringByPrefix(senderData, 'urn:li:fsd_profile:') ||
       findFirstStringByPrefix(senderData, 'urn:li:member:') ||
       findFirstStringByPrefix(senderData, 'urn:li:fs_miniProfile:') ||
-      // Fallback to the whole object only if the sender block is entirely missing
       findFirstStringByPrefix(obj, 'urn:li:msg_messagingParticipant:') ||
       findFirstStringByPrefix(obj, 'urn:li:messagingMember:') ||
       findFirstStringByPrefix(obj, 'urn:li:fsd_profile:') ||
@@ -461,6 +460,67 @@ export async function syncMessagesForUser(
         }
       );
 
+      const { data: existingSyncState } = await supabase
+        .from('message_sync_state')
+        .select('last_sync_cursor')
+        .eq('linkedin_account_id', account.id)
+        .maybeSingle();
+
+      let nextSyncCursor: string | null = existingSyncState?.last_sync_cursor ?? null;
+
+      let mailboxResponse = await client.fetchMailboxConversations(
+        nextSyncCursor ? { syncToken: nextSyncCursor } : undefined
+      );
+
+      if (!mailboxResponse.success) {
+        throw new Error(mailboxResponse.message || 'Failed to fetch mailbox conversations');
+      }
+
+      const discoveredConversations = new Map<string, ParsedConversation>();
+      const parsedMailboxRows = parseConversationPayload(mailboxResponse.data, account.profile_urn);
+      for (const row of parsedMailboxRows) {
+        discoveredConversations.set(row.conversationUrn, row);
+      }
+
+      const returnedSyncToken = extractMailboxSyncToken(mailboxResponse.data);
+      if (returnedSyncToken) {
+        nextSyncCursor = returnedSyncToken;
+      }
+
+      const parsedConversations = Array.from(discoveredConversations.values());
+      const mailboxUrns = parsedConversations.map((c) => c.conversationUrn);
+
+      let localConversations: any[] = [];
+      if (mailboxUrns.length > 0) {
+        const { data: matchedConversations, error: localConversationError } = await supabase
+          .from('conversations')
+          .select('id, lead_id, external_conversation_id, unread_count, last_message_at, last_external_message_id')
+          .eq('user_id', userId)
+          .eq('linkedin_account_id', account.id)
+          .in('external_conversation_id', mailboxUrns);
+
+        if (localConversationError) throw localConversationError;
+        localConversations = matchedConversations || [];
+      }
+
+      const byUrn = new Map<string, {
+        id: string;
+        lead_id: string;
+        unread_count: number;
+        last_message_at: string | null;
+        last_external_message_id: string | null;
+      }>();
+      for (const row of localConversations) {
+        if (!row.external_conversation_id) continue;
+        byUrn.set(row.external_conversation_id, {
+          id: row.id,
+          lead_id: row.lead_id,
+          unread_count: row.unread_count,
+          last_message_at: row.last_message_at,
+          last_external_message_id: row.last_external_message_id,
+        });
+      }
+
       const { data: leadRows } = await supabase
         .from('leads')
         .select(`
@@ -478,78 +538,18 @@ export async function syncMessagesForUser(
         const normalized = normalizeProfileUrn(lead.provider_id);
         if (!normalized) continue;
 
-        // Keep an account-scoped map first for strict matching.
         const campaignAccountId =
           (lead.campaigns as { linkedin_account_id?: string } | null)?.linkedin_account_id ?? null;
         if (campaignAccountId === account.id) {
           leadByProfileUrn.set(normalized, lead.id);
         }
 
-        // Keep a user-wide fallback map for campaign-association edge cases.
         if (!fallbackLeadByProfileUrn.has(normalized)) {
           fallbackLeadByProfileUrn.set(normalized, lead.id);
         }
       }
 
-      const { data: localConversations, error: localConversationError } = await supabase
-        .from('conversations')
-        .select('id, lead_id, external_conversation_id, unread_count, last_message_at, last_external_message_id')
-        .eq('user_id', userId)
-        .eq('linkedin_account_id', account.id)
-        .not('external_conversation_id', 'is', null)
-        .order('updated_at', { ascending: false })
-        .limit(500);
-
-      if (localConversationError) throw localConversationError;
-
-      const byUrn = new Map<string, {
-        id: string;
-        lead_id: string;
-        unread_count: number;
-        last_message_at: string | null;
-        last_external_message_id: string | null;
-      }>();
-      for (const row of localConversations ?? []) {
-        if (!row.external_conversation_id) continue;
-        byUrn.set(row.external_conversation_id, {
-          id: row.id,
-          lead_id: row.lead_id,
-          unread_count: row.unread_count,
-          last_message_at: row.last_message_at,
-          last_external_message_id: row.last_external_message_id,
-        });
-      }
-
-      const discoveredConversations = new Map<string, ParsedConversation>();
       const newlyInsertedConversationUrns = new Set<string>();
-
-      const { data: existingSyncState } = await supabase
-        .from('message_sync_state')
-        .select('last_sync_cursor')
-        .eq('linkedin_account_id', account.id)
-        .maybeSingle();
-
-      let nextSyncCursor: string | null = existingSyncState?.last_sync_cursor ?? null;
-
-      let mailboxResponse = await client.fetchMailboxConversations(
-        nextSyncCursor ? { syncToken: nextSyncCursor } : undefined
-      );
-
-      if (!mailboxResponse.success) {
-        throw new Error(mailboxResponse.message || 'Failed to fetch mailbox conversations');
-      }
-
-      const parsedMailboxRows = parseConversationPayload(mailboxResponse.data, account.profile_urn);
-      for (const row of parsedMailboxRows) {
-        discoveredConversations.set(row.conversationUrn, row);
-      }
-
-      const returnedSyncToken = extractMailboxSyncToken(mailboxResponse.data);
-      if (returnedSyncToken) {
-        nextSyncCursor = returnedSyncToken;
-      }
-
-      const parsedConversations = Array.from(discoveredConversations.values());
 
       for (const parsed of parsedConversations) {
         let local = byUrn.get(parsed.conversationUrn);
@@ -610,9 +610,6 @@ export async function syncMessagesForUser(
           .eq('user_id', userId);
       }
 
-      // ✅ FIXED: N+1 Rate Limit Bomb Prevention
-      // ONLY fetch messages for conversations where the mailbox payload shows a newer timestamp
-      // than what we currently have stored in the local database.
       const conversationsToFetch: ParsedConversation[] = [];
       for (const parsed of parsedConversations) {
         const local = byUrn.get(parsed.conversationUrn);
@@ -626,13 +623,11 @@ export async function syncMessagesForUser(
           continue;
         }
 
-        // Fetch when local conversation has no recorded message marker.
         if (!local.last_external_message_id || !local.last_message_at) {
           conversationsToFetch.push(parsed);
           continue;
         }
 
-        // Fetch when mailbox last message differs from local pointer, even if timestamps are equal.
         if (parsed.lastMessageUrn && local.last_external_message_id !== parsed.lastMessageUrn) {
           conversationsToFetch.push(parsed);
           continue;
@@ -655,8 +650,6 @@ export async function syncMessagesForUser(
         const local = byUrn.get(parsed.conversationUrn)!;
         messageDebug.fetchAttempts += 1;
 
-        // Do not reuse mailbox sync cursor for thread-level fetches.
-        // LinkedIn message endpoints can return empty deltas for mismatched cursors.
         let messageResponse = await client.fetchConversationMessages(parsed.conversationUrn);
 
         if (!messageResponse.success) {
@@ -701,10 +694,14 @@ export async function syncMessagesForUser(
           );
         }
 
-        const sinceIso = local.last_message_at;
+        // ✅ FIXED: Nullify the filter if this is a brand new conversation
+        const isNewConversation = newlyInsertedConversationUrns.has(parsed.conversationUrn);
+        const sinceIso = isNewConversation ? null : local.last_message_at;
+        
         const incrementalMessages = sinceIso
           ? parsedMessages.filter((msg) => new Date(msg.sentAt).getTime() >= new Date(sinceIso).getTime())
           : parsedMessages;
+          
         diagnostics.incrementalMessagesTotal += incrementalMessages.length;
 
         if (!incrementalMessages.length) {
