@@ -56,11 +56,17 @@ function normalizeProfileUrn(value: string | null | undefined): string | null {
     }
   }
 
-  if (urn.startsWith('urn:li:member:')) {
-    urn = `urn:li:fsd_profile:${urn.replace('urn:li:member:', '')}`;
+  // ✅ FIXED: Strip both known messaging wrappers
+  if (urn.startsWith('urn:li:msg_messagingParticipant:')) {
+    urn = urn.replace('urn:li:msg_messagingParticipant:', '');
+  }
+  if (urn.startsWith('urn:li:messagingMember:')) {
+    urn = urn.replace('urn:li:messagingMember:', '');
   }
 
-  if (urn.startsWith('urn:li:fs_miniProfile:')) {
+  if (urn.startsWith('urn:li:member:')) {
+    urn = `urn:li:fsd_profile:${urn.replace('urn:li:member:', '')}`;
+  } else if (urn.startsWith('urn:li:fs_miniProfile:')) {
     urn = `urn:li:fsd_profile:${urn.replace('urn:li:fs_miniProfile:', '')}`;
   }
 
@@ -149,6 +155,29 @@ function collectStringsByPrefix(
   }
 }
 
+function findFirstStringByPrefix(value: unknown, prefix: string): string | null {
+  if (typeof value === 'string') {
+    return value.startsWith(prefix) ? value : null;
+  }
+
+  if (!value || typeof value !== 'object') return null;
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findFirstStringByPrefix(item, prefix);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    const found = findFirstStringByPrefix(child, prefix);
+    if (found) return found;
+  }
+
+  return null;
+}
+
 function toIsoDate(value: unknown): string | null {
   if (typeof value === 'string') {
     const date = new Date(value);
@@ -214,6 +243,7 @@ function pickMessageText(obj: Record<string, unknown>): string | null {
 }
 
 function parseConversationPayload(payload: unknown, accountProfileUrn: string): ParsedConversation[] {
+  const normalizedAccountProfileUrn = normalizeProfileUrn(accountProfileUrn) ?? accountProfileUrn;
   const conversationObjects: Record<string, unknown>[] = [];
   collectObjects(
     payload,
@@ -242,8 +272,14 @@ function parseConversationPayload(payload: unknown, accountProfileUrn: string): 
     collectStringsByPrefix(obj, 'urn:li:msg_message:', messageUrns);
     const profileUrns = new Set<string>();
     collectStringsByPrefix(obj, 'urn:li:fsd_profile:', profileUrns);
+    collectStringsByPrefix(obj, 'urn:li:member:', profileUrns);
+    collectStringsByPrefix(obj, 'urn:li:fs_miniProfile:', profileUrns);
 
-    const participantProfileUrn = Array.from(profileUrns).find((urn) => urn !== accountProfileUrn) ?? null;
+    const normalizedProfileUrns = Array.from(profileUrns)
+      .map((urn) => normalizeProfileUrn(urn) ?? urn)
+      .filter(Boolean);
+
+    const participantProfileUrn = normalizedProfileUrns.find((urn) => urn !== normalizedAccountProfileUrn) ?? null;
 
     byUrn.set(conversationUrn, {
       conversationUrn,
@@ -258,6 +294,7 @@ function parseConversationPayload(payload: unknown, accountProfileUrn: string): 
 }
 
 function parseMessagePayload(payload: unknown, accountProfileUrn: string): ParsedMessage[] {
+  const normalizedAccountProfileUrn = normalizeProfileUrn(accountProfileUrn) ?? accountProfileUrn;
   const messageObjects: Record<string, unknown>[] = [];
   collectObjects(
     payload,
@@ -291,14 +328,34 @@ function parseMessagePayload(payload: unknown, accountProfileUrn: string): Parse
 
     const profileUrns = new Set<string>();
     collectStringsByPrefix(obj, 'urn:li:fsd_profile:', profileUrns);
+    collectStringsByPrefix(obj, 'urn:li:member:', profileUrns);
+    collectStringsByPrefix(obj, 'urn:li:fs_miniProfile:', profileUrns);
+    // ✅ Catch the wrapper globally if it's the only place the ID exists
+    collectStringsByPrefix(obj, 'urn:li:msg_messagingParticipant:', profileUrns);
+    collectStringsByPrefix(obj, 'urn:li:messagingMember:', profileUrns);
 
-    const senderProfileUrn =
-      (obj.sender as { entityUrn?: string } | undefined)?.entityUrn ||
-      (obj.from as { entityUrn?: string } | undefined)?.entityUrn ||
+    // ✅ FIXED: Scope the search to the sender object first to prevent grabbing the lead's URN
+    const senderData = obj.sender ?? obj.from;
+    const senderProfileUrnRaw =
+      (senderData as { entityUrn?: string } | undefined)?.entityUrn ||
+      // ✅ Look for the new prefixes here first
+      findFirstStringByPrefix(senderData, 'urn:li:msg_messagingParticipant:') ||
+      findFirstStringByPrefix(senderData, 'urn:li:messagingMember:') ||
+      findFirstStringByPrefix(senderData, 'urn:li:fsd_profile:') ||
+      findFirstStringByPrefix(senderData, 'urn:li:member:') ||
+      findFirstStringByPrefix(senderData, 'urn:li:fs_miniProfile:') ||
+      // Fallback to the whole object only if the sender block is entirely missing
+      findFirstStringByPrefix(obj, 'urn:li:msg_messagingParticipant:') ||
+      findFirstStringByPrefix(obj, 'urn:li:messagingMember:') ||
+      findFirstStringByPrefix(obj, 'urn:li:fsd_profile:') ||
+      findFirstStringByPrefix(obj, 'urn:li:member:') ||
+      findFirstStringByPrefix(obj, 'urn:li:fs_miniProfile:') ||
       Array.from(profileUrns)[0] ||
       null;
 
-    const outbound = senderProfileUrn === accountProfileUrn;
+    const senderProfileUrn = normalizeProfileUrn(senderProfileUrnRaw) ?? senderProfileUrnRaw;
+
+    const outbound = senderProfileUrn === normalizedAccountProfileUrn;
 
     byUrn.set(messageUrn, {
       messageUrn,
@@ -359,6 +416,7 @@ export async function syncMessagesForUser(
         parsedMessagesTotal: 0,
         incrementalMessagesTotal: 0,
         duplicateMessagesSkipped: 0,
+        correctedExistingMessages: 0,
         insertedMessages: 0,
       };
 
@@ -661,11 +719,42 @@ export async function syncMessagesForUser(
         const externalMessageIds = incrementalMessages.map((msg) => msg.messageUrn);
         const { data: existingMessages } = await supabase
           .from('messages')
-          .select('external_message_id')
+          .select('external_message_id, sender_type, direction')
           .eq('conversation_id', local.id)
           .in('external_message_id', externalMessageIds);
 
-        const existingSet = new Set((existingMessages ?? []).map((row: { external_message_id: string }) => row.external_message_id));
+        type ExistingMessageRow = {
+          external_message_id: string;
+          sender_type: 'linkedin_account' | 'lead';
+          direction: 'outbound' | 'inbound';
+        };
+
+        const existingByExternalId = new Map<string, ExistingMessageRow>(
+          (existingMessages ?? []).map((row: ExistingMessageRow) => [row.external_message_id, row])
+        );
+        const existingSet = new Set(existingByExternalId.keys());
+
+        const rowsToCorrect = incrementalMessages.filter((msg) => {
+          const existing = existingByExternalId.get(msg.messageUrn);
+          if (!existing) return false;
+          return existing.sender_type !== msg.senderType || existing.direction !== msg.direction;
+        });
+
+        if (rowsToCorrect.length) {
+          await Promise.all(
+            rowsToCorrect.map((msg) =>
+              supabase
+                .from('messages')
+                .update({
+                  sender_type: msg.senderType,
+                  direction: msg.direction,
+                })
+                .eq('conversation_id', local.id)
+                .eq('external_message_id', msg.messageUrn)
+            )
+          );
+          diagnostics.correctedExistingMessages += rowsToCorrect.length;
+        }
 
         const rowsToInsert = incrementalMessages
           .filter((msg) => !existingSet.has(msg.messageUrn))
@@ -761,6 +850,7 @@ export async function syncMessagesForUser(
           parsedMessagesTotal: diagnostics.parsedMessagesTotal,
           incrementalMessagesTotal: diagnostics.incrementalMessagesTotal,
           duplicateMessagesSkipped: diagnostics.duplicateMessagesSkipped,
+          correctedExistingMessages: diagnostics.correctedExistingMessages,
           insertedMessages: diagnostics.insertedMessages,
           debug: messageDebug,
         })}`

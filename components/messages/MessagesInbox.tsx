@@ -340,14 +340,14 @@ export default function MessagesInbox() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[330px_1fr] min-h-[640px]">
-        <div className="border-r border-gray-100 bg-gray-50/50">
+      <div className="grid grid-cols-1 lg:grid-cols-[330px_1fr] h-[calc(100vh-220px)] min-h-[560px]">
+        <div className="border-r border-gray-100 bg-gray-50/50 flex flex-col min-h-0 overflow-hidden">
           {loadingConversations && conversations.length === 0 ? (
-            <div className="h-full flex items-center justify-center">
+            <div className="flex-1 flex items-center justify-center">
               <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
             </div>
           ) : conversations.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center p-6 text-center">
+            <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
               <MessageSquare className="h-8 w-8 text-gray-300 mb-2" />
               <p className="text-sm text-gray-500">No conversations found for selected filters.</p>
             </div>
@@ -360,30 +360,32 @@ export default function MessagesInbox() {
                 </div>
               )}
 
-              <ul className="divide-y divide-gray-100">
-                {conversations.map((conversation) => {
-                  const active = activeConversation?.id === conversation.id;
-                  return (
-                    <li key={conversation.id}>
-                      <button
-                        onClick={() => void loadConversation(conversation.id)}
-                        className={`w-full text-left px-4 py-3.5 transition-colors ${
-                          active ? 'bg-blue-50' : 'hover:bg-gray-100'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-semibold text-gray-800 truncate">{conversation.lead.name}</p>
-                          <span className="text-[11px] text-gray-400 shrink-0">
-                            {formatDateTime(conversation.last_message_at)}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-xs text-gray-500 truncate">{conversation.last_message_preview || 'No messages yet'}</p>
-                        <p className="mt-1 text-[11px] text-gray-400">{conversation.account.name}</p>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
+              <div className="flex-1 min-h-0 overflow-y-auto scrollbar-hide">
+                <ul className="divide-y divide-gray-100">
+                  {conversations.map((conversation) => {
+                    const active = activeConversation?.id === conversation.id;
+                    return (
+                      <li key={conversation.id}>
+                        <button
+                          onClick={() => void loadConversation(conversation.id)}
+                          className={`w-full text-left px-4 py-3.5 transition-colors ${
+                            active ? 'bg-blue-50' : 'hover:bg-gray-100'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-semibold text-gray-800 truncate">{conversation.lead.name}</p>
+                            <span className="text-[11px] text-gray-400 shrink-0">
+                              {formatDateTime(conversation.last_message_at)}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-gray-500 truncate">{conversation.last_message_preview || 'No messages yet'}</p>
+                          <p className="mt-1 text-[11px] text-gray-400">{conversation.account.name}</p>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
 
               {conversationPage < conversationPages && (
                 <div className="p-3 border-t border-gray-100 bg-white">
@@ -400,7 +402,7 @@ export default function MessagesInbox() {
           )}
         </div>
 
-        <div className="flex flex-col min-h-[640px]">
+        <div className="flex flex-col min-h-0 h-full">
           {!activeConversation ? (
             <div className="flex-1 flex items-center justify-center text-center p-6">
               <div>
@@ -415,7 +417,7 @@ export default function MessagesInbox() {
                 <p className="text-xs text-gray-500 mt-0.5">LinkedIn Account: {activeConversation.account.name}</p>
               </div>
 
-              <div className="flex-1 p-5 space-y-3 overflow-y-auto bg-gradient-to-b from-white to-gray-50">
+              <div className="flex-1 min-h-0 p-5 space-y-3 overflow-y-auto scrollbar-hide bg-gradient-to-b from-white to-gray-50">
                 {loadingMessages ? (
                   <div className="h-full flex items-center justify-center">
                     <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
@@ -424,26 +426,32 @@ export default function MessagesInbox() {
                   <p className="text-sm text-gray-500">No messages yet.</p>
                 ) : (
                   messages.map((message) => {
-                    const outbound = message.direction === 'outbound';
+                    const outbound =
+                      message.direction === 'outbound' ||
+                      message.sender_type === 'linkedin_account';
+                    const senderLabel = outbound ? activeConversation.account.name || 'You' : activeConversation.lead.name;
                     return (
                       <div
                         key={message.id}
-                        className={`flex ${outbound ? 'justify-end' : 'justify-start'}`}
+                        className={`flex flex-col ${outbound ? 'items-end' : 'items-start'}`}
                       >
+                        <p className={`mb-1 text-[11px] font-medium ${outbound ? 'text-blue-600' : 'text-gray-500'}`}>
+                          {outbound ? 'You' : senderLabel}
+                        </p>
                         <div
-                          className={`max-w-[75%] rounded-xl px-3.5 py-2.5 shadow-sm ${
+                          className={`max-w-[82%] rounded-xl px-3.5 py-2.5 shadow-sm border ${
                             outbound
-                              ? 'bg-blue-600 text-white rounded-br-sm'
-                              : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'
+                              ? 'bg-blue-600 border-blue-600 text-white rounded-br-sm'
+                              : 'bg-white border-gray-200 text-gray-800 rounded-bl-sm'
                           }`}
                         >
                           {message.content_html ? (
                             <div
-                              className="text-sm leading-relaxed"
+                              className="text-sm leading-relaxed break-words [overflow-wrap:anywhere]"
                               dangerouslySetInnerHTML={{ __html: message.content_html }}
                             />
                           ) : (
-                            <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content_text}</p>
+                            <p className="text-sm leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content_text}</p>
                           )}
                           <p className={`mt-1 text-[11px] ${outbound ? 'text-blue-100' : 'text-gray-400'}`}>
                             {formatDateTime(message.sent_at)}
@@ -477,7 +485,7 @@ export default function MessagesInbox() {
                 <div
                   ref={editorRef}
                   contentEditable
-                  className="min-h-[96px] max-h-[180px] overflow-y-auto rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 focus:outline-none focus:border-blue-400"
+                  className="min-h-[96px] max-h-[180px] overflow-y-auto scrollbar-hide rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 break-words [overflow-wrap:anywhere] focus:outline-none focus:border-blue-400"
                   suppressContentEditableWarning
                   data-placeholder="Write your reply..."
                 />

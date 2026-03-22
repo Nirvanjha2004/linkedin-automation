@@ -949,12 +949,9 @@ export class LinkedInClient {
         method: 'GET',
         headers: minimalHeaders,
       });
-      
-      console.log(`[fetchConversationMessages] Response status for thread ${threadId}:`, res.status);
-      
+            
       if (res.ok) {
         const data = await res.json();
-        console.log(`[fetchConversationMessages] Success for thread ${threadId}`);
         return { success: true, data };
       }
 
