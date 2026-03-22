@@ -902,15 +902,24 @@ export class LinkedInClient {
     params?: { syncToken?: string }
   ): Promise<LinkedInResponse> {
 
-    // 1. Format variables exactly like the cURL trace.
-    // In the cURL, the URN and token values are URL-encoded, but the outer brackets () 
-    // and the keys (conversationUrn:, syncToken:) are NOT encoded.
-    const encodedUrn = encodeURIComponent(conversationUrn);
+    // Assuming VOYAGER is defined in your class/file scope
+    const VOYAGER = 'https://www.linkedin.com/voyager/api'; 
+    const queryId = 'messengerMessages.5846eeb71c981f11e0134cb6626cc314';
+
+    // 1. THE FIX: Strict URI Encoder
+    // Standard encodeURIComponent ignores ()!'* which breaks LinkedIn's GraphQL parser.
+    // This helper forces the encoding of those specific characters.
+    const strictEncode = (str: string) => 
+      encodeURIComponent(str).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+
+    // 2. Format variables using the strict encoder for the values, 
+    // but LEAVE the outer brackets unencoded to match the cURL exactly.
+    const encodedUrn = strictEncode(conversationUrn);
     const variablesString = params?.syncToken 
-      ? `(conversationUrn:${encodedUrn},syncToken:${encodeURIComponent(params.syncToken)})`
+      ? `(conversationUrn:${encodedUrn},syncToken:${strictEncode(params.syncToken)})`
       : `(conversationUrn:${encodedUrn})`;
 
-    const queryId = 'messengerMessages.5846eeb71c981f11e0134cb6626cc314';
+    // 3. Construct URL manually to preserve the raw outer parentheses of variablesString
     const url = `${VOYAGER}/voyagerMessagingGraphQL/graphql?queryId=${queryId}&variables=${variablesString}`;
 
     // Dynamically extract the thread ID from the URN to build the exact referer URL.
@@ -920,17 +929,18 @@ export class LinkedInClient {
       ? `https://www.linkedin.com/messaging/thread/${threadId}/`
       : 'https://www.linkedin.com/messaging/';
 
-    // Safely format the JSESSIONID (remove quotes if present in DB)
+    // Safely format the JSESSIONID (remove quotes for csrf-token header)
     const cleanJsessionId = (this.jsessionid || '').replace(/"/g, '');
 
-    // 2. Minimal, exact headers to prevent 401/403
+    // 4. Minimal, exact headers
     const minimalHeaders = {
       'accept': 'application/graphql',
       'accept-language': 'en-US,en;q=0.8',
       'cache-control': 'no-cache',
       'x-restli-protocol-version': '2.0.0',
       'referer': refererUrl,
-      'csrf-token': cleanJsessionId, // Mandatory matching token
+      'csrf-token': cleanJsessionId, 
+      // Ensure the JSESSIONID cookie retains its quotation marks here
       'cookie': `li_at=${this.liAt}; JSESSIONID="${cleanJsessionId}";`
     };
 
@@ -939,15 +949,15 @@ export class LinkedInClient {
         method: 'GET',
         headers: minimalHeaders,
       });
+      
       console.log(`[fetchConversationMessages] Response status for thread ${threadId}:`, res.status);
-      // 3. Safely check OK before parsing JSON
+      
       if (res.ok) {
         const data = await res.json();
         console.log(`[fetchConversationMessages] Success for thread ${threadId}`);
         return { success: true, data };
       }
 
-      // 4. Handle HTTP errors (400, 403, etc.) safely without crashing
       const bodyText = await res.text().catch(() => '');
       console.warn(`[fetchConversationMessages] HTTP ${res.status}`, bodyText);
 
@@ -956,12 +966,11 @@ export class LinkedInClient {
       
       return { 
         success: false, 
-        error: parsed.code || `HTTP_${res.status}`, 
-        message: parsed.message || `HTTP ${res.status} error from LinkedIn` 
+        error: parsed?.code || `HTTP_${res.status}`, 
+        message: parsed?.message || `HTTP ${res.status} error from LinkedIn` 
       };
 
     } catch (error: any) {
-      // 5. Network/Execution failure handling
       const message = error instanceof Error ? error.message : 'Messages request failed';
       console.error("[fetchConversationMessages] Network error:", message);
       

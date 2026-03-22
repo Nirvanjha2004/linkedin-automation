@@ -164,6 +164,55 @@ function toIsoDate(value: unknown): string | null {
   return null;
 }
 
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function payloadHasObjectKeys(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function pickMessageText(obj: Record<string, unknown>): string | null {
+  const attributedBody = obj.attributedBody as { text?: string } | undefined;
+  const body = obj.body as { text?: string } | undefined;
+  const messageObj = obj.message as Record<string, unknown> | undefined;
+
+  const messageBody = messageObj?.body as { text?: string } | undefined;
+  const messageAttributedBody = messageObj?.attributedBody as { text?: string } | undefined;
+
+  const direct = firstString(
+    attributedBody?.text,
+    body?.text,
+    messageAttributedBody?.text,
+    messageBody?.text,
+    obj.text,
+    obj.plainText,
+    obj.renderedBody,
+    obj.localizedBodyText
+  );
+  if (direct) return direct;
+
+  // Fallback: some payload variants keep text nested in render/content unions.
+  const nestedCandidates: string[] = [];
+
+  const renderContentUnions = (obj.renderContentUnions as unknown[]) ?? [];
+  for (const item of renderContentUnions) {
+    if (typeof item === 'object' && item !== null) {
+      const text = firstString(
+        (item as Record<string, unknown>).text,
+        ((item as Record<string, unknown>).body as { text?: string } | undefined)?.text,
+        ((item as Record<string, unknown>).attributedBody as { text?: string } | undefined)?.text
+      );
+      if (text) nestedCandidates.push(text);
+    }
+  }
+
+  return nestedCandidates.find((value) => value.trim().length > 0) ?? null;
+}
+
 function parseConversationPayload(payload: unknown, accountProfileUrn: string): ParsedConversation[] {
   const conversationObjects: Record<string, unknown>[] = [];
   collectObjects(
@@ -214,6 +263,9 @@ function parseMessagePayload(payload: unknown, accountProfileUrn: string): Parse
     payload,
     (obj) =>
       (typeof obj.entityUrn === 'string' && obj.entityUrn.startsWith('urn:li:msg_message:')) ||
+      (typeof obj.entityUrn === 'string' && obj.entityUrn.startsWith('urn:li:messenger_message:')) ||
+      (typeof obj.dashEntityUrn === 'string' && obj.dashEntityUrn.startsWith('urn:li:msg_message:')) ||
+      (typeof obj.dashEntityUrn === 'string' && obj.dashEntityUrn.startsWith('urn:li:messenger_message:')) ||
       (typeof obj.$type === 'string' && obj.$type.toLowerCase().includes('messengermessage')),
     messageObjects
   );
@@ -227,10 +279,7 @@ function parseMessagePayload(payload: unknown, accountProfileUrn: string): Parse
 
     if (!messageUrn) continue;
 
-    const text =
-      (obj.body as { text?: string } | undefined)?.text ||
-      ((obj.message as { body?: { text?: string } } | undefined)?.body?.text) ||
-      (typeof obj.text === 'string' ? obj.text : '');
+    const text = pickMessageText(obj) ?? '';
 
     if (!text.trim()) continue;
 
@@ -302,21 +351,38 @@ export async function syncMessagesForUser(
       syncedAccounts += 1;
 
       const diagnostics = {
-        mailboxConversations: 0,
-        existingConversationMatches: 0,
-        insertedConversations: 0,
-        fallbackLeadMatches: 0,
-        skippedNoParticipantUrn: 0,
-        skippedLeadNotMapped: 0,
-        conversationsWithoutLocalAfterUpsert: 0,
         conversationsToFetchMessages: 0,
         skippedMessageFetchNoLocal: 0,
         skippedMessageFetchNotNewer: 0,
         messageFetchFailed: 0,
+        messageFetchFallbackUsed: 0,
         parsedMessagesTotal: 0,
         incrementalMessagesTotal: 0,
         duplicateMessagesSkipped: 0,
         insertedMessages: 0,
+      };
+
+      const messageDebug = {
+        accountId: String(account.id),
+        fetchAttempts: 0,
+        fetchSuccess: 0,
+        fetchFailures: [] as Array<{ conversationUrn: string; error: string }>,
+        parsedZeroCount: 0,
+        incrementalZeroCount: 0,
+        duplicateOnlyCount: 0,
+        insertAttempts: 0,
+        insertSuccess: 0,
+        insertFailures: [] as Array<{ conversationUrn: string; error: string; rowsAttempted: number }>,
+        sampleConversations: [] as Array<{
+          conversationUrn: string;
+          localConversationId: string;
+          sinceIso: string | null;
+          parsedCount: number;
+          incrementalCount: number;
+          dedupedCount: number;
+          duplicateCount: number;
+          insertedCount: number;
+        }>,
       };
 
       if (!account.li_at || !account.jsessionid || !account.profile_urn) {
@@ -367,11 +433,9 @@ export async function syncMessagesForUser(
         }
       }
 
-      const unmatchedParticipantUrns = new Set<string>();
-
       const { data: localConversations, error: localConversationError } = await supabase
         .from('conversations')
-        .select('id, lead_id, external_conversation_id, unread_count, last_message_at')
+        .select('id, lead_id, external_conversation_id, unread_count, last_message_at, last_external_message_id')
         .eq('user_id', userId)
         .eq('linkedin_account_id', account.id)
         .not('external_conversation_id', 'is', null)
@@ -380,7 +444,13 @@ export async function syncMessagesForUser(
 
       if (localConversationError) throw localConversationError;
 
-      const byUrn = new Map<string, { id: string; lead_id: string; unread_count: number; last_message_at: string | null }>();
+      const byUrn = new Map<string, {
+        id: string;
+        lead_id: string;
+        unread_count: number;
+        last_message_at: string | null;
+        last_external_message_id: string | null;
+      }>();
       for (const row of localConversations ?? []) {
         if (!row.external_conversation_id) continue;
         byUrn.set(row.external_conversation_id, {
@@ -388,10 +458,12 @@ export async function syncMessagesForUser(
           lead_id: row.lead_id,
           unread_count: row.unread_count,
           last_message_at: row.last_message_at,
+          last_external_message_id: row.last_external_message_id,
         });
       }
 
       const discoveredConversations = new Map<string, ParsedConversation>();
+      const newlyInsertedConversationUrns = new Set<string>();
 
       const { data: existingSyncState } = await supabase
         .from('message_sync_state')
@@ -420,18 +492,15 @@ export async function syncMessagesForUser(
       }
 
       const parsedConversations = Array.from(discoveredConversations.values());
-      diagnostics.mailboxConversations = parsedConversations.length;
 
       for (const parsed of parsedConversations) {
         let local = byUrn.get(parsed.conversationUrn);
-        if (local) diagnostics.existingConversationMatches += 1;
 
         if (!local && parsed.participantProfileUrn) {
           const normalizedParticipantUrn = normalizeProfileUrn(parsed.participantProfileUrn) ?? '';
           let leadId = leadByProfileUrn.get(normalizedParticipantUrn);
           if (!leadId) {
             leadId = fallbackLeadByProfileUrn.get(normalizedParticipantUrn);
-            if (leadId) diagnostics.fallbackLeadMatches += 1;
           }
 
           if (leadId) {
@@ -456,20 +525,15 @@ export async function syncMessagesForUser(
                 lead_id: insertedConversation.lead_id,
                 unread_count: insertedConversation.unread_count,
                 last_message_at: insertedConversation.last_message_at,
+                last_external_message_id: parsed.lastMessageUrn,
               });
+              newlyInsertedConversationUrns.add(parsed.conversationUrn);
               newConversations += 1;
-              diagnostics.insertedConversations += 1;
             }
-          } else {
-            diagnostics.skippedLeadNotMapped += 1;
-            unmatchedParticipantUrns.add(normalizedParticipantUrn || parsed.participantProfileUrn);
           }
-        } else if (!local) {
-          diagnostics.skippedNoParticipantUrn += 1;
         }
 
         if (!local) {
-          diagnostics.conversationsWithoutLocalAfterUpsert += 1;
           continue;
         }
 
@@ -499,6 +563,23 @@ export async function syncMessagesForUser(
           continue;
         }
 
+        if (newlyInsertedConversationUrns.has(parsed.conversationUrn)) {
+          conversationsToFetch.push(parsed);
+          continue;
+        }
+
+        // Fetch when local conversation has no recorded message marker.
+        if (!local.last_external_message_id || !local.last_message_at) {
+          conversationsToFetch.push(parsed);
+          continue;
+        }
+
+        // Fetch when mailbox last message differs from local pointer, even if timestamps are equal.
+        if (parsed.lastMessageUrn && local.last_external_message_id !== parsed.lastMessageUrn) {
+          conversationsToFetch.push(parsed);
+          continue;
+        }
+
         if (!local.last_message_at || !parsed.lastMessageAt) {
           conversationsToFetch.push(parsed);
           continue;
@@ -514,20 +595,67 @@ export async function syncMessagesForUser(
 
       for (const parsed of conversationsToFetch) {
         const local = byUrn.get(parsed.conversationUrn)!;
-        const messageResponse = await client.fetchConversationMessages(parsed.conversationUrn);
-        
+        messageDebug.fetchAttempts += 1;
+
+        let messageResponse = await client.fetchConversationMessages(
+          parsed.conversationUrn,
+          nextSyncCursor ? { syncToken: nextSyncCursor } : undefined
+        );
+
+        if (!messageResponse.success) {
+          const fallbackResponse = await client.fetchConversationsByIds([parsed.conversationUrn]);
+          if (fallbackResponse.success) {
+            diagnostics.messageFetchFallbackUsed += 1;
+            console.log(
+              `[MessageSync][messages][account=${account.id}] fetch_fallback_used conversation=${parsed.conversationUrn}`
+            );
+            messageResponse = fallbackResponse;
+          }
+        }
+
         if (!messageResponse.success) {
           diagnostics.messageFetchFailed += 1;
+          messageDebug.fetchFailures.push({
+            conversationUrn: parsed.conversationUrn,
+            error: messageResponse.message || 'Unknown message fetch failure',
+          });
+          console.log(
+            `[MessageSync][messages][account=${account.id}] fetch_failed conversation=${parsed.conversationUrn} error=${messageResponse.message || 'Unknown message fetch failure'}`
+          );
           continue;
         }
+        messageDebug.fetchSuccess += 1;
 
         const parsedMessages = parseMessagePayload(messageResponse.data, account.profile_urn);
         diagnostics.parsedMessagesTotal += parsedMessages.length;
+
+        if (!parsedMessages.length) {
+          messageDebug.parsedZeroCount += 1;
+          const topLevelKeys =
+            payloadHasObjectKeys(messageResponse.data)
+              ? Object.keys(messageResponse.data as Record<string, unknown>).slice(0, 20)
+              : [];
+          const messageUrnCandidates = new Set<string>();
+          collectStringsByPrefix(messageResponse.data, 'urn:li:msg_message:', messageUrnCandidates);
+          collectStringsByPrefix(messageResponse.data, 'urn:li:messenger_message:', messageUrnCandidates);
+
+          console.log(
+            `[MessageSync][messages][account=${account.id}] parsed_zero conversation=${parsed.conversationUrn} localConversationId=${local.id} topLevelKeys=${JSON.stringify(topLevelKeys)} messageUrnCandidates=${JSON.stringify(Array.from(messageUrnCandidates).slice(0, 10))}`
+          );
+        }
+
         const sinceIso = local.last_message_at;
         const incrementalMessages = sinceIso
-          ? parsedMessages.filter((msg) => new Date(msg.sentAt).getTime() > new Date(sinceIso).getTime())
+          ? parsedMessages.filter((msg) => new Date(msg.sentAt).getTime() >= new Date(sinceIso).getTime())
           : parsedMessages;
         diagnostics.incrementalMessagesTotal += incrementalMessages.length;
+
+        if (!incrementalMessages.length) {
+          messageDebug.incrementalZeroCount += 1;
+          console.log(
+            `[MessageSync][messages][account=${account.id}] incremental_zero conversation=${parsed.conversationUrn} localConversationId=${local.id} sinceIso=${sinceIso}`
+          );
+        }
 
         if (!incrementalMessages.length) continue;
 
@@ -560,15 +688,58 @@ export async function syncMessagesForUser(
 
         diagnostics.duplicateMessagesSkipped += incrementalMessages.length - rowsToInsert.length;
 
+        if (!rowsToInsert.length) {
+          messageDebug.duplicateOnlyCount += 1;
+          console.log(
+            `[MessageSync][messages][account=${account.id}] duplicate_only conversation=${parsed.conversationUrn} localConversationId=${local.id} incremental=${incrementalMessages.length}`
+          );
+        }
+
+        if (messageDebug.sampleConversations.length < 15) {
+          messageDebug.sampleConversations.push({
+            conversationUrn: parsed.conversationUrn,
+            localConversationId: local.id,
+            sinceIso,
+            parsedCount: parsedMessages.length,
+            incrementalCount: incrementalMessages.length,
+            dedupedCount: rowsToInsert.length,
+            duplicateCount: incrementalMessages.length - rowsToInsert.length,
+            insertedCount: 0,
+          });
+        }
+
         if (!rowsToInsert.length) continue;
 
+        messageDebug.insertAttempts += 1;
         const { error: insertError } = await supabase
           .from('messages')
           .insert(rowsToInsert);
-        if (insertError) throw insertError;
+
+        if (insertError) {
+          messageDebug.insertFailures.push({
+            conversationUrn: parsed.conversationUrn,
+            error: insertError.message,
+            rowsAttempted: rowsToInsert.length,
+          });
+          console.log(
+            `[MessageSync][messages][account=${account.id}] insert_failed conversation=${parsed.conversationUrn} localConversationId=${local.id} rows=${rowsToInsert.length} error=${insertError.message}`
+          );
+          throw insertError;
+        }
+
+        messageDebug.insertSuccess += 1;
 
         newMessages += rowsToInsert.length;
         diagnostics.insertedMessages += rowsToInsert.length;
+
+        const sample = messageDebug.sampleConversations.find((entry) => entry.conversationUrn === parsed.conversationUrn);
+        if (sample) {
+          sample.insertedCount = rowsToInsert.length;
+        }
+
+        console.log(
+          `[MessageSync][messages][account=${account.id}] inserted conversation=${parsed.conversationUrn} localConversationId=${local.id} inserted=${rowsToInsert.length}`
+        );
 
         const latest = rowsToInsert[rowsToInsert.length - 1];
         await supabase
@@ -582,17 +753,19 @@ export async function syncMessagesForUser(
       }
 
       console.log(
-        `[MessageSync][account=${account.id}] ${JSON.stringify(diagnostics)}`
+        `[MessageSync][messages][account=${account.id}] summary=${JSON.stringify({
+          conversationsToFetchMessages: diagnostics.conversationsToFetchMessages,
+          skippedMessageFetchNoLocal: diagnostics.skippedMessageFetchNoLocal,
+          skippedMessageFetchNotNewer: diagnostics.skippedMessageFetchNotNewer,
+          messageFetchFailed: diagnostics.messageFetchFailed,
+          messageFetchFallbackUsed: diagnostics.messageFetchFallbackUsed,
+          parsedMessagesTotal: diagnostics.parsedMessagesTotal,
+          incrementalMessagesTotal: diagnostics.incrementalMessagesTotal,
+          duplicateMessagesSkipped: diagnostics.duplicateMessagesSkipped,
+          insertedMessages: diagnostics.insertedMessages,
+          debug: messageDebug,
+        })}`
       );
-
-      if (unmatchedParticipantUrns.size > 0) {
-        const unmatched = Array.from(unmatchedParticipantUrns).slice(0, 15);
-        const mappedSample = Array.from(leadByProfileUrn.keys()).slice(0, 15);
-        const fallbackMappedSample = Array.from(fallbackLeadByProfileUrn.keys()).slice(0, 15);
-        console.log(
-          `[MessageSync][account=${account.id}] unmatchedParticipantUrns=${JSON.stringify(unmatched)} mappedLeadUrnsSample=${JSON.stringify(mappedSample)} fallbackMappedLeadUrnsSample=${JSON.stringify(fallbackMappedSample)}`
-        );
-      }
 
       await supabase
         .from('message_sync_state')

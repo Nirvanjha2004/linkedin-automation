@@ -70,6 +70,33 @@ function firstDayThirtyDaysAgo(): string {
   return date.toISOString().split('T')[0];
 }
 
+function mergeConversations(
+  existing: ConversationSummary[],
+  incoming: ConversationSummary[]
+): ConversationSummary[] {
+  if (!existing.length) return incoming;
+  if (!incoming.length) return existing;
+
+  const next = [...existing];
+  const indexById = new Map<string, number>();
+
+  next.forEach((conversation, index) => {
+    indexById.set(conversation.id, index);
+  });
+
+  for (const conversation of incoming) {
+    const existingIndex = indexById.get(conversation.id);
+    if (existingIndex === undefined) {
+      indexById.set(conversation.id, next.length);
+      next.push(conversation);
+    } else {
+      next[existingIndex] = conversation;
+    }
+  }
+
+  return next;
+}
+
 export default function MessagesInbox() {
   const PAGE_SIZE = 25;
 
@@ -84,6 +111,7 @@ export default function MessagesInbox() {
 
   const [loadingConversations, setLoadingConversations] = useState<boolean>(true);
   const [loadingMoreConversations, setLoadingMoreConversations] = useState<boolean>(false);
+  const [refreshingConversations, setRefreshingConversations] = useState<boolean>(false);
   const [loadingMessages, setLoadingMessages] = useState<boolean>(false);
   const [syncing, setSyncing] = useState<boolean>(false);
   const [sending, setSending] = useState<boolean>(false);
@@ -91,6 +119,17 @@ export default function MessagesInbox() {
   const [conversationPages, setConversationPages] = useState<number>(1);
 
   const editorRef = useRef<HTMLDivElement>(null);
+  const conversationsRef = useRef<ConversationSummary[]>([]);
+  const activeConversationRef = useRef<ConversationDetails | null>(null);
+  const queryKeyRef = useRef<string>('');
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
 
   const fetchAccounts = useCallback(async () => {
     try {
@@ -101,11 +140,29 @@ export default function MessagesInbox() {
     }
   }, []);
 
+  const loadConversation = useCallback(async (conversationId: string) => {
+    setLoadingMessages(true);
+    try {
+      const { data } = await axios.get(`/api/messages/conversations/${conversationId}`);
+      setActiveConversation(data.conversation);
+      setMessages(data.messages || []);
+    } catch {
+      toast.error('Failed to load conversation');
+    } finally {
+      setLoadingMessages(false);
+    }
+  }, []);
+
   const fetchConversations = useCallback(async (nextPage = 1, append = false) => {
+    const queryKey = `${selectedAccountId}|${fromDate}|${toDate}`;
+    const queryChanged = queryKeyRef.current !== queryKey;
+
     if (append) {
       setLoadingMoreConversations(true);
-    } else {
+    } else if (conversationsRef.current.length === 0) {
       setLoadingConversations(true);
+    } else {
+      setRefreshingConversations(true);
     }
 
     try {
@@ -122,20 +179,29 @@ export default function MessagesInbox() {
 
       const { data } = await axios.get('/api/messages/conversations', { params });
       const rows: ConversationSummary[] = data.conversations || [];
-      setConversations((prev) => (append ? [...prev, ...rows] : rows));
+
+      const shouldReplace = !append && queryChanged;
+      const nextConversations = shouldReplace
+        ? rows
+        : mergeConversations(conversationsRef.current, rows);
+
+      setConversations(nextConversations);
+      conversationsRef.current = nextConversations;
+      queryKeyRef.current = queryKey;
+
       setConversationPage(data.page || nextPage);
       setConversationPages(data.pages || 1);
 
-      const mergedRows = append ? [...conversations, ...rows] : rows;
-
-      if (!mergedRows.length) {
+      if (!nextConversations.length) {
         setActiveConversation(null);
+        activeConversationRef.current = null;
         setMessages([]);
         return;
       }
 
-      if (!activeConversation || !mergedRows.some((r) => r.id === activeConversation.id)) {
-        void loadConversation(mergedRows[0].id);
+      const currentActiveConversation = activeConversationRef.current;
+      if (!currentActiveConversation || !nextConversations.some((row) => row.id === currentActiveConversation.id)) {
+        void loadConversation(nextConversations[0].id);
       }
     } catch {
       toast.error('Failed to load conversations');
@@ -144,22 +210,10 @@ export default function MessagesInbox() {
         setLoadingMoreConversations(false);
       } else {
         setLoadingConversations(false);
+        setRefreshingConversations(false);
       }
     }
-  }, [selectedAccountId, fromDate, toDate, activeConversation, conversations]);
-
-  const loadConversation = useCallback(async (conversationId: string) => {
-    setLoadingMessages(true);
-    try {
-      const { data } = await axios.get(`/api/messages/conversations/${conversationId}`);
-      setActiveConversation(data.conversation);
-      setMessages(data.messages || []);
-    } catch {
-      toast.error('Failed to load conversation');
-    } finally {
-      setLoadingMessages(false);
-    }
-  }, []);
+  }, [selectedAccountId, fromDate, toDate, loadConversation]);
 
   useEffect(() => {
     void fetchAccounts();
@@ -288,7 +342,7 @@ export default function MessagesInbox() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[330px_1fr] min-h-[640px]">
         <div className="border-r border-gray-100 bg-gray-50/50">
-          {loadingConversations ? (
+          {loadingConversations && conversations.length === 0 ? (
             <div className="h-full flex items-center justify-center">
               <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
             </div>
@@ -299,6 +353,13 @@ export default function MessagesInbox() {
             </div>
           ) : (
             <>
+              {refreshingConversations && (
+                <div className="px-4 py-2 border-b border-gray-100 bg-white text-xs text-gray-500 flex items-center gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" />
+                  Refreshing conversations...
+                </div>
+              )}
+
               <ul className="divide-y divide-gray-100">
                 {conversations.map((conversation) => {
                   const active = activeConversation?.id === conversation.id;
