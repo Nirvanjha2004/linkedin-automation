@@ -155,16 +155,70 @@ export async function POST(request: NextRequest) {
             errorMsg = `No template configured for ${msgType}`;
           } else {
             const message = personalize(template, leadData);
+
+            const { data: existingConversation } = await supabase
+              .from('conversations')
+              .select('external_conversation_id')
+              .eq('linkedin_account_id', action.account_id)
+              .eq('lead_id', action.lead_id)
+              .maybeSingle();
+
             const result = await client.sendMessage({
               linkedin_url: action.payload.linkedin_url as string,
               provider_id: action.payload.provider_id as string | undefined,
               message,
+              conversation_urn: existingConversation?.external_conversation_id ?? undefined,
             });
             success = result.success;
             errorMsg = result.error ?? '';
 
             if (success) {
               const { status: newStatus, timestampField } = MESSAGE_STATUS_MAP[msgType];
+
+              const conversationUrn =
+                existingConversation?.external_conversation_id ||
+                client.extractConversationUrn(result.data);
+              const messageUrn = client.extractMessageUrn(result.data);
+
+              if (conversationUrn) {
+                const { data: campaignRow } = await supabase
+                  .from('campaigns')
+                  .select('user_id')
+                  .eq('id', action.campaign_id)
+                  .maybeSingle();
+
+                if (campaignRow?.user_id) {
+                  const { data: conversationRow } = await supabase
+                    .from('conversations')
+                    .upsert({
+                      user_id: campaignRow.user_id,
+                      linkedin_account_id: action.account_id,
+                      lead_id: action.lead_id,
+                      external_conversation_id: conversationUrn,
+                      last_external_message_id: messageUrn,
+                      last_message_at: currentTime.toISOString(),
+                    }, { onConflict: 'linkedin_account_id,lead_id' })
+                    .select('id')
+                    .single();
+
+                  if (conversationRow?.id && messageUrn) {
+                    await supabase
+                      .from('messages')
+                      .upsert({
+                        conversation_id: conversationRow.id,
+                        user_id: campaignRow.user_id,
+                        external_message_id: messageUrn,
+                        sender_type: 'linkedin_account',
+                        direction: 'outbound',
+                        content_text: message,
+                        content_html: `<p>${message}</p>`,
+                        metadata: { source: 'worker_send' },
+                        sent_at: currentTime.toISOString(),
+                      }, { onConflict: 'conversation_id,external_message_id' });
+                  }
+                }
+              }
+
               await supabase.from('action_queue')
                 .update({ status: 'completed', executed_at: currentTime.toISOString() })
                 .eq('id', action.id);

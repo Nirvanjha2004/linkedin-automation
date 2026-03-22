@@ -44,25 +44,62 @@ export async function POST(request: NextRequest) {
 
     const name = [firstName, lastName].filter(Boolean).join(' ') || vanityName;
 
-    // Step 3: Upsert account
-    const { data: account, error: upsertError } = await supabase
-      .from('linkedin_accounts')
-      .upsert({
-        user_id: user.id,
-        name,
-        li_at: liAt,
-        jsessionid,
-        profile_urn: profileUrn,
-        vanity_name: vanityName,
-        is_active: true,
-        updated_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+    // Step 3: Manual upsert (works even when ON CONFLICT constraint inference is unavailable)
+    const payload = {
+      user_id: user.id,
+      name,
+      // Keep legacy field populated for backward compatibility with older schema constraints.
+      unipile_account_id: `linkedin:${profileUrn}`,
+      li_at: liAt,
+      jsessionid,
+      profile_urn: profileUrn,
+      vanity_name: vanityName,
+      is_active: true,
+      updated_at: new Date().toISOString(),
+    };
 
-    if (upsertError) {
-      console.error('Database upsert error:', upsertError);
+    const { data: existing, error: existingError } = await supabase
+      .from('linkedin_accounts')
+      .select('id')
+      .eq('user_id', user.id)
+      .eq('profile_urn', profileUrn)
+      .maybeSingle();
+
+    if (existingError) {
+      console.error('Database lookup error:', existingError);
       return NextResponse.json({ error: 'Database error' }, { status: 500 });
+    }
+
+    let account = null;
+
+    if (existing?.id) {
+      const { data: updated, error: updateError } = await supabase
+        .from('linkedin_accounts')
+        .update(payload)
+        .eq('id', existing.id)
+        .eq('user_id', user.id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('Database update error:', updateError);
+        return NextResponse.json({ error: 'Database error' }, { status: 500 });
+      }
+
+      account = updated;
+    } else {
+      const { data: inserted, error: insertError } = await supabase
+        .from('linkedin_accounts')
+        .insert(payload)
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('Database insert error:', insertError);
+        return NextResponse.json({ error: 'Database error' }, { status: 500 });
+      }
+
+      account = inserted;
     }
 
     return NextResponse.json({ success: true, account });

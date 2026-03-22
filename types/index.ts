@@ -2,6 +2,8 @@ export type CampaignStatus = 'draft' | 'active' | 'paused' | 'completed' | 'arch
 export type LeadStatus = 'pending' | 'processing' | 'connection_sent' | 'connected' | 'message_sent' | 'followup_1_sent' | 'followup_2_sent' | 'replied' | 'completed' | 'failed' | 'skipped';
 export type ActionType = 'connect' | 'message' | 'follow_up';
 export type ActionStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'skipped';
+export type MessageSenderType = 'linkedin_account' | 'lead';
+export type MessageDirection = 'outbound' | 'inbound';
 
 export interface User {
   id: string;
@@ -158,4 +160,31 @@ export interface ConflictResolution {
   winner_campaign_id: string;
   loser_campaign_ids: string[];
   reason: string;
+}
+
+export interface Conversation {
+  id: string;
+  user_id: string;
+  linkedin_account_id: string;
+  lead_id: string;
+  external_conversation_id?: string;
+  last_external_message_id?: string;
+  unread_count: number;
+  last_message_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  external_message_id: string;
+  sender_type: MessageSenderType;
+  direction: MessageDirection;
+  content_text: string;
+  content_html?: string;
+  metadata?: Record<string, unknown>;
+  sent_at: string;
+  created_at: string;
 }

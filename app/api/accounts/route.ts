@@ -15,7 +15,7 @@ export async function GET() {
 
     const { data: accounts, error } = await supabase
       .from('linkedin_accounts')
-      .select('*')
+      .select('id, user_id, name, email, profile_url, vanity_name, is_active, created_at, updated_at')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false });
 

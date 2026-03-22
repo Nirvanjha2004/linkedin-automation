@@ -5,6 +5,7 @@
  * Schedule:
  *   - Scheduler  : every 3 minutes  → POST /api/scheduler-v2
  *   - Worker     : every 30 seconds → POST /api/worker
+ *   - Msg Sync   : every 5 minutes  → POST /api/messages/sync
  */
 
 import cron from 'node-cron';
@@ -14,6 +15,7 @@ const CRON_SECRET = process.env.CRON_SECRET || '';
 
 const headers = {
   'Content-Type': 'application/json',
+  'x-cron-runner': '1',
   ...(CRON_SECRET ? { Authorization: `Bearer ${CRON_SECRET}` } : {}),
 };
 
@@ -51,8 +53,14 @@ cron.schedule('*/2 * * * *', () => {
   callEndpoint('CheckConnections', '/api/check-connections');
 });
 
+// ── Message sync (hybrid mode): every 5 minutes ─────────────────────────────
+cron.schedule('*/1 * * * *', () => {
+  callEndpoint('MessageSync', '/api/messages/sync');
+});
+
 console.log(`🚀 Cron runner started — targeting ${BASE_URL}`);
 console.log('   Scheduler        → /api/scheduler-v2      (every 3 min)');
 console.log('   Worker           → /api/worker             (every 30 sec)');
 console.log('   CheckConnections → /api/check-connections  (every 20 min)');
+console.log('   MessageSync      → /api/messages/sync      (every 5 min)');
 console.log('Press Ctrl+C to stop.\n');

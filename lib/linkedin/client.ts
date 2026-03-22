@@ -1,6 +1,31 @@
 import { randomUUID } from 'crypto';
 
 const VOYAGER = 'https://www.linkedin.com/voyager/api';
+const DEFAULT_MESSENGER_CONVERSATIONS_QUERY_ID =
+  process.env.LINKEDIN_MESSENGER_CONVERSATIONS_QUERY_ID ||
+  'messengerConversations.0d5e6781bbee71c3e51c8843c6519f48';
+const DEFAULT_MESSENGER_MESSAGES_QUERY_ID =
+  process.env.LINKEDIN_MESSENGER_MESSAGES_QUERY_ID ||
+  'messengerMessages.5846eeb71c981f11e0134cb6626cc314';
+
+const MESSENGER_CONVERSATIONS_QUERY_ID_CANDIDATES = [
+  ...(process.env.LINKEDIN_MESSENGER_CONVERSATIONS_QUERY_IDS || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean),
+  DEFAULT_MESSENGER_CONVERSATIONS_QUERY_ID,
+];
+
+const MESSENGER_MESSAGES_QUERY_ID_CANDIDATES = [
+  ...(process.env.LINKEDIN_MESSENGER_MESSAGES_QUERY_IDS || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean),
+  DEFAULT_MESSENGER_MESSAGES_QUERY_ID,
+];
+
+const HARDCODED_MESSENGER_CONVERSATIONS_QUERY_ID =
+  'messengerConversations.74c17e85611b60b7ba2700481151a316';
 
 /**
  * LinkedIn profile GraphQL query ID.
@@ -73,29 +98,35 @@ function buildHeaders(
   extra: Record<string, string> = {}
 ): Record<string, string> {
   return {
-    accept: 'application/vnd.linkedin.normalized+json+2.1',
-    'accept-language': 'en-US,en;q=0.8',
+    accept: 'application/vnd.linkedin.normalized+json+2.1', // The fetch function will override this with application/graphql when needed
+    'accept-language': 'en-US,en;q=0.9', // Updated from q=0.8
     'cache-control': 'no-cache',
     'csrf-token': jsessionid,
     pragma: 'no-cache',
-    'x-li-lang': 'en_US',
-    'x-li-track': JSON.stringify({
-      clientVersion: '1.13.42597',
-      mpVersion: '1.13.42597',
-      osName: 'web',
-      timezoneOffset: 0,
-      timezone: 'UTC',
-      deviceFormFactor: 'DESKTOP',
-      mpName: 'voyager-web',
-      displayDensity: 1,
-      displayWidth: 1920,
-      displayHeight: 1080,
-    }),
-    'x-restli-protocol-version': '2.0.0',
+    priority: 'u=1, i', // Added from cURL
+    'sec-ch-prefers-color-scheme': 'dark', // Added from cURL
+    'sec-ch-ua': '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"', // Added from cURL
+    'sec-ch-ua-mobile': '?0', // Added from cURL
+    'sec-ch-ua-platform': '"Windows"', // Added from cURL
+    'sec-fetch-dest': 'empty', // Added from cURL
     'sec-fetch-mode': 'cors',
     'sec-fetch-site': 'same-origin',
     'user-agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', // Updated to Chrome 146
+    'x-li-lang': 'en_US',
+    'x-li-track': JSON.stringify({
+      clientVersion: '1.13.42962', // Updated to match cURL build
+      mpVersion: '1.13.42962',     // Updated to match cURL build
+      osName: 'web',
+      timezoneOffset: 5.5,         // Updated to match cURL
+      timezone: 'Asia/Calcutta',   // Updated to match cURL
+      deviceFormFactor: 'DESKTOP',
+      mpName: 'voyager-web',
+      displayDensity: 1.25,        // Updated to match cURL
+      displayWidth: 1920,
+      displayHeight: 1200,         // Updated to match cURL
+    }),
+    'x-restli-protocol-version': '2.0.0',
     ...extra,
   };
 }
@@ -104,6 +135,29 @@ function buildHeaders(
 function buildCookie(liAt: string, jsessionid: string): string {
   // Cookie requires quoted JSESSIONID; csrf-token header uses the bare value
   return `li_at=${liAt}; JSESSIONID="${jsessionid}"`;
+}
+
+function findStringByPrefix(value: unknown, prefix: string): string | null {
+  if (typeof value === 'string') {
+    return value.startsWith(prefix) ? value : null;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findStringByPrefix(item, prefix);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    for (const entry of Object.values(value)) {
+      const found = findStringByPrefix(entry, prefix);
+      if (found) return found;
+    }
+  }
+
+  return null;
 }
 
 interface ParsedError {
@@ -339,6 +393,9 @@ export class LinkedInClient {
   /** The account owner's own fsd_profile URN — used as mailboxUrn in messages */
   private profileUrn: string;
   private onSessionRefresh: OnSessionRefresh | null;
+  private discoveredConversationQueryIds: string[] = [];
+  private discoveredMessageQueryIds: string[] = [];
+  private queryDiscoveryAttempted = false;
 
   constructor(
     liAt: string,
@@ -358,6 +415,74 @@ export class LinkedInClient {
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     return { ...buildHeaders(this.jsessionid, extra), Cookie: this.cookie };
+  }
+
+  private mailboxUrnCandidates(): string[] {
+    const candidates = new Set<string>();
+    const urn = (this.profileUrn || '').trim();
+    if (!urn) return [];
+
+    candidates.add(urn);
+    candidates.add(`"${urn}"`);
+
+    if (urn.startsWith('urn:li:member:')) {
+      const id = urn.replace('urn:li:member:', '');
+      candidates.add(`urn:li:fsd_profile:${id}`);
+      candidates.add(`"urn:li:fsd_profile:${id}"`);
+    }
+
+    if (urn.startsWith('urn:li:fs_miniProfile:')) {
+      const id = urn.replace('urn:li:fs_miniProfile:', '');
+      candidates.add(`urn:li:fsd_profile:${id}`);
+      candidates.add(`"urn:li:fsd_profile:${id}"`);
+    }
+
+    return Array.from(candidates);
+  }
+
+  private async discoverMessagingQueryIds(): Promise<void> {
+    if (this.queryDiscoveryAttempted) return;
+    this.queryDiscoveryAttempted = true;
+
+    try {
+      const res = await fetch('https://www.linkedin.com/messaging/', {
+        method: 'GET',
+        headers: {
+          Cookie: this.cookie,
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.8',
+          'csrf-token': this.jsessionid,
+          referer: 'https://www.linkedin.com/',
+        },
+      });
+
+      if (!res.ok) return;
+      const html = await res.text();
+
+      const convMatches = html.match(/messengerConversations\.[a-f0-9]{32}/gi) || [];
+      const msgMatches = html.match(/messengerMessages\.[a-f0-9]{32}/gi) || [];
+
+      this.discoveredConversationQueryIds = Array.from(new Set(convMatches));
+      this.discoveredMessageQueryIds = Array.from(new Set(msgMatches));
+    } catch {
+      // Best-effort discovery only.
+    }
+  }
+
+  private conversationQueryIdCandidates(): string[] {
+    return Array.from(new Set([
+      ...this.discoveredConversationQueryIds,
+      ...MESSENGER_CONVERSATIONS_QUERY_ID_CANDIDATES,
+    ]));
+  }
+
+  private messageQueryIdCandidates(): string[] {
+    return Array.from(new Set([
+      ...this.discoveredMessageQueryIds,
+      ...MESSENGER_MESSAGES_QUERY_ID_CANDIDATES,
+    ]));
   }
 
   /**
@@ -574,6 +699,8 @@ export class LinkedInClient {
     linkedin_url: string;
     message: string;
     provider_id?: string | null;
+    conversation_urn?: string | null;
+    quick_action_context_urn?: string | null;
   }): Promise<LinkedInResponse> {
     let recipientUrn = params.provider_id ?? null;
 
@@ -596,20 +723,33 @@ export class LinkedInClient {
     // ✅ trackingId must be raw binary bytes from a UUID, not a plain UUID string
     const trackingIdBytes = this.uuidToBytes(randomUUID());
 
-    const body = {
-      message: {
-        body: {
-          attributes: [],
-          text: params.message,
-        },
-        originToken: randomUUID(),   // this one stays as a UUID string
-        renderContentUnions: [],
+    const baseMessage = {
+      body: {
+        attributes: [],
+        text: params.message,
       },
+      originToken: randomUUID(),
+      renderContentUnions: [],
+    } as Record<string, unknown>;
+
+    if (params.conversation_urn) {
+      baseMessage.conversationUrn = params.conversation_urn;
+    }
+
+    const body: Record<string, unknown> = {
+      message: baseMessage,
       mailboxUrn: this.profileUrn,
       trackingId: trackingIdBytes,
       dedupeByClientGeneratedToken: false,
-      hostRecipientUrns: [recipientUrn],
     };
+
+    if (params.conversation_urn) {
+      if (params.quick_action_context_urn) {
+        body.quickActionContextUrn = params.quick_action_context_urn;
+      }
+    } else {
+      body.hostRecipientUrns = [recipientUrn];
+    }
 
     console.log("[sendMessage] Request body:", JSON.stringify(body, null, 2));
     console.log("[sendMessage] Request URL:", url);
@@ -657,6 +797,184 @@ export class LinkedInClient {
     const responseData = await res.json();
     console.log("[sendMessage] Success:", JSON.stringify(responseData, null, 2));
     return { success: true, data: responseData };
+  }
+
+  async fetchConversationsByIds(conversationUrns: string[]): Promise<LinkedInResponse> {
+    if (!conversationUrns.length) {
+      return { success: true, data: {} };
+    }
+
+    const idsExpr = `List(${conversationUrns.join(',')})`;
+    const url = `${VOYAGER}/voyagerMessagingDashMessengerConversations?ids=${encodeURIComponent(idsExpr)}`;
+
+    let res = await fetch(url, {
+      method: 'GET',
+      headers: this.headers({
+        accept: 'application/json',
+        'content-type': 'text/plain;charset=UTF-8',
+      }),
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      if (await this.tryRefreshSession()) {
+        res = await fetch(url, {
+          method: 'GET',
+          headers: this.headers({
+            accept: 'application/json',
+            'content-type': 'text/plain;charset=UTF-8',
+          }),
+        });
+      }
+    }
+
+    if (!res.ok) {
+      const { code, message } = parseLinkedInError(res.status, await res.text());
+      return { success: false, error: code, message };
+    }
+
+    const data = await res.json();
+    return { success: true, data };
+  }
+
+  async fetchMailboxConversations(params?: { start?: number; count?: number; syncToken?: string }): Promise<LinkedInResponse> {
+    void params;
+
+    const mailboxUrn = (this.profileUrn || '').trim();
+    if (!mailboxUrn) {
+      return { success: false, error: 'unknown_error', message: 'Missing mailbox URN' };
+    }
+
+    // Keep request shape hardcoded, only mailboxUrn/auth are dynamic per account.
+    const workingVariables = `(mailboxUrn:${encodeURIComponent(mailboxUrn)})`;
+
+    // Constructing the exact URL that worked before
+    const url = `${VOYAGER}/voyagerMessagingGraphQL/graphql?queryId=${HARDCODED_MESSENGER_CONVERSATIONS_QUERY_ID}&variables=${workingVariables}`;
+
+    // Safely remove any accidental extra quotes from the JSESSIONID just in case it was saved weirdly in the DB
+    const cleanJsessionId = (this.jsessionid || '').replace(/"/g, '');
+
+    const minimalHeaders = {
+      'accept': 'application/graphql',
+      'accept-language': 'en-US,en;q=0.8',
+      'cache-control': 'no-cache',
+      'x-restli-protocol-version': '2.0.0',
+      'csrf-token': cleanJsessionId, // Mandatory for preventing 403 Forbidden
+      'cookie': `li_at=${this.liAt}; JSESSIONID="${cleanJsessionId}";` 
+    };
+
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: minimalHeaders,
+      });
+
+      // 2. Safely check if the response is OK FIRST before trying to parse JSON
+      if (res.ok) {
+        const data = await res.json();
+        console.log("[fetchMailboxConversations] Success! Data fetched.");
+        return { success: true, data };
+      }
+
+      // 3. If it's an error (400, 401, 403, etc.), read as text so it doesn't crash on HTML error pages
+      const bodyText = await res.text().catch(() => '');
+      console.warn(`[fetchMailboxConversations] Warning: HTTP ${res.status}`, bodyText);
+
+      // Pass it to your custom error parser
+      // @ts-ignore
+      const parsed = parseLinkedInError(res.status, bodyText);
+      
+      return { 
+        success: false, 
+        error: parsed.code || `HTTP_${res.status}`, 
+        message: parsed.message || `HTTP ${res.status} error from LinkedIn` 
+      };
+
+    } catch (error: any) {
+      // 4. Clean catch block for actual network failures (e.g., internet down, DNS issues)
+      const message = error instanceof Error ? error.message : 'Mailbox request failed';
+      console.error("[fetchMailboxConversations] Network or execution error:", message);
+      
+      return { success: false, error: 'network_error', message };
+    }
+  }
+  async fetchConversationMessages(
+    conversationUrn: string,
+    params?: { syncToken?: string }
+  ): Promise<LinkedInResponse> {
+
+    // 1. Format variables exactly like the cURL trace.
+    // In the cURL, the URN and token values are URL-encoded, but the outer brackets () 
+    // and the keys (conversationUrn:, syncToken:) are NOT encoded.
+    const encodedUrn = encodeURIComponent(conversationUrn);
+    const variablesString = params?.syncToken 
+      ? `(conversationUrn:${encodedUrn},syncToken:${encodeURIComponent(params.syncToken)})`
+      : `(conversationUrn:${encodedUrn})`;
+
+    const queryId = 'messengerMessages.5846eeb71c981f11e0134cb6626cc314';
+    const url = `${VOYAGER}/voyagerMessagingGraphQL/graphql?queryId=${queryId}&variables=${variablesString}`;
+
+    // Dynamically extract the thread ID from the URN to build the exact referer URL.
+    const threadIdMatch = conversationUrn.match(/,([^,)]+)\)$/);
+    const threadId = threadIdMatch ? threadIdMatch[1] : conversationUrn.replace(/.*[:,]/, '').replace(/\)$/, '');
+    const refererUrl = threadId
+      ? `https://www.linkedin.com/messaging/thread/${threadId}/`
+      : 'https://www.linkedin.com/messaging/';
+
+    // Safely format the JSESSIONID (remove quotes if present in DB)
+    const cleanJsessionId = (this.jsessionid || '').replace(/"/g, '');
+
+    // 2. Minimal, exact headers to prevent 401/403
+    const minimalHeaders = {
+      'accept': 'application/graphql',
+      'accept-language': 'en-US,en;q=0.8',
+      'cache-control': 'no-cache',
+      'x-restli-protocol-version': '2.0.0',
+      'referer': refererUrl,
+      'csrf-token': cleanJsessionId, // Mandatory matching token
+      'cookie': `li_at=${this.liAt}; JSESSIONID="${cleanJsessionId}";`
+    };
+
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: minimalHeaders,
+      });
+      console.log(`[fetchConversationMessages] Response status for thread ${threadId}:`, res.status);
+      // 3. Safely check OK before parsing JSON
+      if (res.ok) {
+        const data = await res.json();
+        console.log(`[fetchConversationMessages] Success for thread ${threadId}`);
+        return { success: true, data };
+      }
+
+      // 4. Handle HTTP errors (400, 403, etc.) safely without crashing
+      const bodyText = await res.text().catch(() => '');
+      console.warn(`[fetchConversationMessages] HTTP ${res.status}`, bodyText);
+
+      // @ts-ignore
+      const parsed = parseLinkedInError(res.status, bodyText);
+      
+      return { 
+        success: false, 
+        error: parsed.code || `HTTP_${res.status}`, 
+        message: parsed.message || `HTTP ${res.status} error from LinkedIn` 
+      };
+
+    } catch (error: any) {
+      // 5. Network/Execution failure handling
+      const message = error instanceof Error ? error.message : 'Messages request failed';
+      console.error("[fetchConversationMessages] Network error:", message);
+      
+      return { success: false, error: 'network_error', message };
+    }
+  }
+
+  extractConversationUrn(payload: unknown): string | null {
+    return findStringByPrefix(payload, 'urn:li:msg_conversation:');
+  }
+
+  extractMessageUrn(payload: unknown): string | null {
+    return findStringByPrefix(payload, 'urn:li:msg_message:');
   }
 
   // ✅ Converts UUID string to raw binary byte string (what LinkedIn expects for trackingId)
