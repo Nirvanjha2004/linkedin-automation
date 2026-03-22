@@ -597,10 +597,9 @@ export async function syncMessagesForUser(
         const local = byUrn.get(parsed.conversationUrn)!;
         messageDebug.fetchAttempts += 1;
 
-        let messageResponse = await client.fetchConversationMessages(
-          parsed.conversationUrn,
-          nextSyncCursor ? { syncToken: nextSyncCursor } : undefined
-        );
+        // Do not reuse mailbox sync cursor for thread-level fetches.
+        // LinkedIn message endpoints can return empty deltas for mismatched cursors.
+        let messageResponse = await client.fetchConversationMessages(parsed.conversationUrn);
 
         if (!messageResponse.success) {
           const fallbackResponse = await client.fetchConversationsByIds([parsed.conversationUrn]);
