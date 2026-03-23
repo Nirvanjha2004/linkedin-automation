@@ -10,6 +10,7 @@ import {
   Linkedin, Plus, CheckCircle, XCircle, ExternalLink,
   Loader2, Trash2, AlertTriangle, Key, X, ChevronRight,
 } from 'lucide-react';
+import { UpgradeModal } from '@/components/billing/UpgradeModal';
 
 function DailyInviteBar({ sent, limit }: { sent: number; limit: number }) {
   const pct = limit > 0 ? Math.min((sent / limit) * 100, 100) : 0;
@@ -44,6 +45,7 @@ function ConnectModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
   const [liAt, setLiAt] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [upgradeModal, setUpgradeModal] = useState<{ reason: string; cost: number } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,10 +56,17 @@ function ConnectModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
       toast.success('LinkedIn account connected');
       onSuccess(); onClose();
     } catch (err: unknown) {
-      const msg = axios.isAxiosError(err)
-        ? err.response?.data?.message ?? err.response?.data?.error ?? 'Connection failed'
-        : 'Connection failed';
-      setError(msg);
+      if (axios.isAxiosError(err) && err.response?.data?.upgrade_required) {
+        setUpgradeModal({
+          reason: err.response.data.reason || 'You have reached your free plan limits.',
+          cost: err.response.data.estimated_monthly_cost ?? 10,
+        });
+      } else {
+        const msg = axios.isAxiosError(err)
+          ? err.response?.data?.message ?? err.response?.data?.error ?? 'Connection failed'
+          : 'Connection failed';
+        setError(msg);
+      }
     } finally { setLoading(false); }
   };
 
@@ -70,6 +79,14 @@ function ConnectModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: 
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      {upgradeModal && (
+        <UpgradeModal
+          open
+          onClose={() => setUpgradeModal(null)}
+          reason={upgradeModal.reason}
+          estimatedMonthlyCost={upgradeModal.cost}
+        />
+      )}
       <div className="bg-white rounded-xl border border-zinc-200 w-full max-w-md shadow-lg">
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-100">
           <div className="flex items-center gap-3">

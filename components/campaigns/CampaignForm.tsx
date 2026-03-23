@@ -8,6 +8,7 @@ import { Clock, Calendar, MessageSquare, Users, ChevronDown, Plus, Trash2, Loade
 import { Campaign, LinkedInAccount, TimeWindow } from '@/types';
 import { DAY_NAMES, TIMEZONES, cn } from '@/lib/utils';
 import { SectionCard } from '@/components/ui/section-card';
+import { UpgradeModal } from '@/components/billing/UpgradeModal';
 
 interface CampaignFormProps {
   campaign?: Campaign;
@@ -26,6 +27,7 @@ const labelCls = 'block text-sm font-medium text-zinc-700 mb-1.5';
 export default function CampaignForm({ campaign, onSuccess }: CampaignFormProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [upgradeModal, setUpgradeModal] = useState<{ reason: string; cost: number } | null>(null);
   const [accounts, setAccounts] = useState<LinkedInAccount[]>([]);
   const [name, setName] = useState(campaign?.name || '');
   const [description, setDescription] = useState(campaign?.description || '');
@@ -73,8 +75,15 @@ export default function CampaignForm({ campaign, onSuccess }: CampaignFormProps)
       if (onSuccess) onSuccess(response.data.campaign);
       else router.push(`/dashboard/campaigns/${response.data.campaign.id}`);
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e?.response?.data?.error || 'Something went wrong');
+      const e = err as { response?: { data?: { error?: string; reason?: string; upgrade_required?: boolean; estimated_monthly_cost?: number } } };
+      if (e?.response?.data?.upgrade_required) {
+        setUpgradeModal({
+          reason: e.response.data.reason || 'You have reached your free plan limits.',
+          cost: e.response.data.estimated_monthly_cost ?? 10,
+        });
+      } else {
+        toast.error(e?.response?.data?.error || 'Something went wrong');
+      }
     } finally { setLoading(false); }
   };
 
@@ -82,6 +91,14 @@ export default function CampaignForm({ campaign, onSuccess }: CampaignFormProps)
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
+      {upgradeModal && (
+        <UpgradeModal
+          open
+          onClose={() => setUpgradeModal(null)}
+          reason={upgradeModal.reason}
+          estimatedMonthlyCost={upgradeModal.cost}
+        />
+      )}
       {/* Campaign Details */}
       <SectionCard title="Campaign Details">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

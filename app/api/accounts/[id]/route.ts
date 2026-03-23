@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { updateAccountCounters } from '@/lib/billing/entitlement';
 
 // DELETE /api/accounts/:id
 export async function DELETE(
@@ -22,6 +23,9 @@ export async function DELETE(
       .eq('user_id', user.id);
 
     if (error) throw error;
+
+    // Decrement current_accounts (peak is never reduced — anti-abuse)
+    await updateAccountCounters(user.id, -1);
 
     return NextResponse.json({ success: true });
   } catch (err: unknown) {

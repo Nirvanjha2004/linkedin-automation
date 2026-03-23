@@ -8,8 +8,11 @@ import { Button } from '@/components/ui/button';
 import {
   User, CreditCard, Plug, Shield, Loader2,
   Copy, Eye, EyeOff, Check, AlertTriangle,
-  ChevronRight, Zap,
+  ChevronRight, Zap, AlertCircle,
 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { UpgradeModal } from '@/components/billing/UpgradeModal';
+import type { BillingStatus } from '@/types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -255,64 +258,146 @@ function ProfileSection({ user }: { user: UserData | null }) {
 }
 
 function BillingSection() {
+  const [status, setStatus] = useState<BillingStatus | null>(null);
+  const [loadingStatus, setLoadingStatus] = useState(true);
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/billing/status')
+      .then(r => r.json())
+      .then(data => setStatus(data))
+      .finally(() => setLoadingStatus(false));
+  }, []);
+
+  const openPortal = async () => {
+    setPortalLoading(true);
+    try {
+      const res = await fetch('/api/billing/portal', { method: 'POST' });
+      const data = await res.json();
+      if (data.url) window.location.href = data.url;
+    } finally {
+      setPortalLoading(false);
+    }
+  };
+
+  const planBadge = () => {
+    if (!status) return null;
+    if (status.subscription_status === 'past_due') {
+      return <Badge variant="warning">Past due</Badge>;
+    }
+    if (status.plan === 'paid') {
+      return <Badge variant="success">Paid</Badge>;
+    }
+    return <Badge variant="secondary">Free</Badge>;
+  };
+
+  if (loadingStatus) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
+
+  const isPaid = status?.plan === 'paid';
+  const isPastDue = status?.subscription_status === 'past_due';
+
   return (
     <div className="space-y-5">
-      <SettingsSection title="Current plan" description="You are on the free plan">
+      {/* Grace period warning */}
+      {isPastDue && (
+        <div className="flex items-start gap-3 p-4 rounded-lg bg-amber-50 border border-amber-200">
+          <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-amber-800">Payment past due</p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              Your payment failed. You have a 3-day grace period before access is restricted.
+              {status?.grace_period_ends_at && (
+                <> Grace period ends {new Date(status.grace_period_ends_at).toLocaleDateString()}.</>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
+      <SettingsSection
+        title="Current plan"
+        description={isPaid ? 'You are on the paid plan' : 'You are on the free plan'}
+      >
         <div className="flex items-center justify-between p-4 rounded-lg bg-indigo-50 border border-indigo-100">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-indigo-100 flex items-center justify-center">
               <Zap className="h-4 w-4 text-indigo-600" />
             </div>
-            <div>
-              <p className="text-sm font-semibold text-indigo-900">Free plan</p>
-              <p className="text-xs text-indigo-600 mt-0.5">Up to 3 campaigns · 500 leads</p>
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold text-indigo-900">
+                {isPaid ? 'Paid plan' : 'Free plan'}
+              </p>
+              {planBadge()}
             </div>
           </div>
-          <Button size="sm">Upgrade plan</Button>
+          {isPaid ? (
+            <Button variant="outline" size="sm" onClick={openPortal} disabled={portalLoading}>
+              {portalLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Manage billing
+            </Button>
+          ) : (
+            <Button size="sm" onClick={() => setUpgradeOpen(true)}>
+              Upgrade
+            </Button>
+          )}
         </div>
 
+        {/* Usage stats */}
         <div className="space-y-3 pt-1">
-          <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Usage this month</p>
-          {[
-            { label: 'Campaigns', used: 2, max: 3 },
-            { label: 'Leads',     used: 312, max: 500 },
-          ].map(({ label, used, max }) => {
-            const pct = Math.round((used / max) * 100);
-            return (
-              <div key={label}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-sm text-zinc-600">{label}</span>
-                  <span className="text-xs text-zinc-500 tabular-nums">{used} / {max}</span>
-                </div>
-                <div className="h-1.5 bg-zinc-100 rounded-full overflow-hidden">
-                  <div
-                    className={cn(
-                      'h-full rounded-full transition-all',
-                      pct >= 90 ? 'bg-red-400' : pct >= 70 ? 'bg-amber-400' : 'bg-indigo-500'
-                    )}
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
+          <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">Account usage this cycle</p>
+          <div className="divide-y divide-zinc-50">
+            <div className="flex items-center justify-between py-2.5 first:pt-0">
+              <span className="text-sm text-zinc-600">Connected accounts</span>
+              <span className="text-sm font-semibold text-zinc-900 tabular-nums">
+                {status?.current_accounts ?? 0}
+              </span>
+            </div>
+            <div className="flex items-center justify-between py-2.5">
+              <span className="text-sm text-zinc-600">Peak accounts this cycle</span>
+              <span className="text-sm font-semibold text-zinc-900 tabular-nums">
+                {status?.peak_accounts ?? 0}
+              </span>
+            </div>
+            <div className="flex items-center justify-between py-2.5">
+              <span className="text-sm text-zinc-600">Estimated next invoice</span>
+              <span className="text-sm font-semibold text-zinc-900 tabular-nums">
+                ${status?.estimated_next_invoice ?? 0}
+              </span>
+            </div>
+            {status?.current_period_end && (
+              <div className="flex items-center justify-between py-2.5">
+                <span className="text-sm text-zinc-600">Current period ends</span>
+                <span className="text-sm font-medium text-zinc-900">
+                  {new Date(status.current_period_end).toLocaleDateString()}
+                </span>
               </div>
-            );
-          })}
+            )}
+          </div>
+        </div>
+
+        {/* Policy notice */}
+        <div className="flex items-start gap-2.5 p-3 rounded-lg bg-zinc-50 border border-zinc-200">
+          <CreditCard className="h-4 w-4 text-zinc-400 mt-0.5 shrink-0" />
+          <p className="text-xs text-zinc-500">
+            Billing is based on highest number of connected accounts during the billing period.
+            Deleting accounts does not reduce charges already accrued in the current period.
+          </p>
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Payment method" description="Manage your billing information">
-        <div className="flex items-center justify-between p-4 rounded-lg border border-zinc-200 bg-zinc-50/60">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-white border border-zinc-200 flex items-center justify-center">
-              <CreditCard className="h-4 w-4 text-zinc-400" />
-            </div>
-            <div>
-              <p className="text-sm text-zinc-500">No payment method added</p>
-              <p className="text-xs text-zinc-400 mt-0.5">Required for paid plans</p>
-            </div>
-          </div>
-          <Button variant="outline" size="sm">Add card</Button>
-        </div>
-      </SettingsSection>
+      <UpgradeModal
+        open={upgradeOpen}
+        onClose={() => setUpgradeOpen(false)}
+        reason="Connect more LinkedIn accounts and create additional campaigns."
+        estimatedMonthlyCost={10}
+      />
     </div>
   );
 }

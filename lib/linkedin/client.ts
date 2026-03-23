@@ -33,7 +33,7 @@ export type LinkedInErrorCode =
 
 /** Enriched lead data — identical shape to the Unipile client for DB compatibility */
 export interface LeadProfileData {
-  provider_id: string;            // urn:li:fsd_profile:XXX
+  provider_id: string | null;     // urn:li:fsd_profile:XXX
   first_name: string | null;
   last_name: string | null;
   full_name: string | null;
@@ -208,7 +208,7 @@ function parseLinkedInError(status: number, body: unknown): ParsedError {
 // ─── Profile Extraction ───────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractLeadProfile(profileEntity: any): LeadProfileData {
+function extractLeadProfile(profileEntity: any, included: any[] = []): LeadProfileData {
   const firstName: string | null = profileEntity?.firstName ?? null;
   const lastName: string | null = profileEntity?.lastName ?? null;
   const fullName =
@@ -230,32 +230,61 @@ function extractLeadProfile(profileEntity: any): LeadProfileData {
   }
 
   const vanityName: string | null = profileEntity?.publicIdentifier ?? null;
+  const profileUrn: string | null = profileEntity?.entityUrn ?? null;
 
-  // Current position — first entry from position groups or flat positions
+  // Current position — LinkedIn returns positions as separate entities in `included`
+  // The profileTopPosition on the profile entity points to the top position URN.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const positions: any[] =
-    profileEntity?.profilePositionGroups?.elements ??
-    profileEntity?.positions?.elements ??
-    [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const current = positions.find((p: any) => !p.dateRange?.end) ?? positions[0] ?? null;
+  let currentPosition: any = null;
+
+  // Try to find the top position URN from the profile entity
+  const topPositionUrns: string[] =
+    profileEntity?.profileTopPosition?.['*elements'] ?? [];
+
+  if (topPositionUrns.length > 0 && included.length > 0) {
+    currentPosition = included.find(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (e: any) => e.entityUrn === topPositionUrns[0]
+    ) ?? null;
+  }
+
+  // Fallback: scan included for any fsd_profilePosition belonging to this profile
+  // that has no end date (i.e. current role)
+  if (!currentPosition && profileUrn && included.length > 0) {
+    const profileId = profileUrn.split(':').pop();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const positions = included.filter((e: any) =>
+      typeof e.entityUrn === 'string' &&
+      e.entityUrn.startsWith(`urn:li:fsd_profilePosition:(${profileId}`) ||
+      (typeof e.entityUrn === 'string' &&
+        e.entityUrn.includes('fsd_profilePosition') &&
+        e.entityUrn.includes(profileId ?? ''))
+    );
+    currentPosition =
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      positions.find((p: any) => !p.dateRange?.end) ?? positions[0] ?? null;
+  }
+
+  // Location: prefer geo name, fall back to countryCode
+  const location: string | null =
+    profileEntity?.geoLocation?.geo?.defaultLocalizedName ??
+    profileEntity?.location?.defaultLocalizedName ??
+    profileEntity?.location?.countryCode?.toUpperCase() ??
+    null;
 
   return {
-    provider_id: profileEntity?.entityUrn ?? null,
+    provider_id: profileUrn ?? null,
     first_name: firstName,
     last_name: lastName,
     full_name: fullName,
     headline: profileEntity?.headline ?? null,
-    location:
-      profileEntity?.geoLocation?.geo?.defaultLocalizedName ??
-      profileEntity?.location?.defaultLocalizedName ??
-      null,
+    location,
     profile_pic_url: profilePicUrl,
     public_profile_url: vanityName
       ? `https://www.linkedin.com/in/${vanityName}/`
       : null,
-    company: current?.companyName ?? null,
-    title: current?.title ?? null,
+    company: currentPosition?.companyName ?? null,
+    title: currentPosition?.title ?? null,
   };
 }
 
@@ -482,7 +511,7 @@ export class LinkedInClient {
       success: true,
       data: entity,
       included,
-      profileData: extractLeadProfile(entity),
+      profileData: extractLeadProfile(entity, included),
     };
   }
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import Papa from 'papaparse';
 import { CSVRow } from '@/types';
+import { checkLeadUpload } from '@/lib/billing/entitlement';
 
 const LINKEDIN_URL_PATTERN = /linkedin\.com\/(in|pub)\//i;
 
@@ -131,6 +132,15 @@ export async function POST(request: NextRequest) {
 
     const newLeads = leadsToInsert.filter(l => !existingUrls.has(l.linkedin_url));
     const duplicates = leadsToInsert.length - newLeads.length;
+
+    // Entitlement check: enforce free plan lead limit
+    const entitlement = await checkLeadUpload(user.id, newLeads.length);
+    if (!entitlement.allowed) {
+      return NextResponse.json(
+        { error: entitlement.reason, reason: entitlement.reason, upgrade_required: true },
+        { status: 403 }
+      );
+    }
 
     const BATCH_SIZE = 100;
     let inserted = 0;

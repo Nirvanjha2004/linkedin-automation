@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { checkCampaignCreate } from '@/lib/billing/entitlement';
 
 // GET /api/campaigns - List user's campaigns
 export async function GET() {
@@ -39,6 +40,14 @@ export async function POST(request: NextRequest) {
 
     if (!name) {
       return NextResponse.json({ error: 'Campaign name is required' }, { status: 400 });
+    }
+
+    const entitlement = await checkCampaignCreate(user.id);
+    if (!entitlement.allowed) {
+      return NextResponse.json(
+        { error: entitlement.reason, reason: entitlement.reason, upgrade_required: true },
+        { status: 403 }
+      );
     }
 
     const { data: campaign, error } = await supabase

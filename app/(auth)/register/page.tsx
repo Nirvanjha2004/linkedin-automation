@@ -57,7 +57,7 @@ export default function RegisterPage() {
           <label className="block text-sm font-medium text-zinc-700 mb-1.5">Password</label>
           <div className="relative">
             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 pointer-events-none" />
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" className={inputCls} />
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="Minimum 6 characters" className={inputCls} />
           </div>
         </div>
         <button

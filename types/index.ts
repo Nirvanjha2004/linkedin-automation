@@ -188,3 +188,40 @@ export interface ConversationMessage {
   sent_at: string;
   created_at: string;
 }
+
+// ── Billing & Subscription ────────────────────────────────────────────────────
+
+export type PlanType = 'free' | 'paid';
+export type SubscriptionStatus = 'inactive' | 'active' | 'past_due' | 'canceled';
+
+export interface UserSubscription {
+  user_id: string;
+  plan: PlanType;
+  subscription_status: SubscriptionStatus;
+  stripe_customer_id?: string;
+  stripe_subscription_id?: string;
+  current_period_start?: string;
+  current_period_end?: string;
+  current_accounts: number;
+  peak_accounts: number;
+  grace_period_ends_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EntitlementError {
+  allowed: false;
+  reason: string;
+  upgrade_required: boolean;
+  estimated_monthly_cost?: number;
+}
+
+export interface BillingStatus {
+  plan: PlanType;
+  subscription_status: SubscriptionStatus;
+  current_accounts: number;
+  peak_accounts: number;
+  estimated_next_invoice: number;
+  grace_period_ends_at?: string;
+  current_period_end?: string;
+}

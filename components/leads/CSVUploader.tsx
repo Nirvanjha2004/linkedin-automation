@@ -5,6 +5,7 @@ import axios from 'axios';
 import toast from 'react-hot-toast';
 import { Upload, FileText, CheckCircle, AlertCircle, Loader2, X } from 'lucide-react';
 import { SectionCard } from '@/components/ui/section-card';
+import { UpgradeModal } from '@/components/billing/UpgradeModal';
 
 interface CSVUploaderProps {
   campaignId: string;
@@ -16,6 +17,7 @@ export default function CSVUploader({ campaignId, onSuccess }: CSVUploaderProps)
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<{ inserted: number; duplicates: number; invalid: number; total_rows: number } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [upgradeModal, setUpgradeModal] = useState<{ reason: string; cost: number } | null>(null);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -42,13 +44,28 @@ export default function CSVUploader({ campaignId, onSuccess }: CSVUploaderProps)
       toast.success(`Imported ${data.inserted} leads`);
       if (onSuccess) onSuccess();
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e?.response?.data?.error || 'Upload failed');
+      const e = err as { response?: { data?: { error?: string; reason?: string; upgrade_required?: boolean; estimated_monthly_cost?: number } } };
+      if (e?.response?.data?.upgrade_required) {
+        setUpgradeModal({
+          reason: e.response.data.reason || 'You have reached your free plan limits.',
+          cost: e.response.data.estimated_monthly_cost ?? 10,
+        });
+      } else {
+        toast.error(e?.response?.data?.error || 'Upload failed');
+      }
     } finally { setUploading(false); }
   };
 
   return (
     <SectionCard title="Import Leads from CSV">
+      {upgradeModal && (
+        <UpgradeModal
+          open
+          onClose={() => setUpgradeModal(null)}
+          reason={upgradeModal.reason}
+          estimatedMonthlyCost={upgradeModal.cost}
+        />
+      )}
       {/* Info */}
       <div className="bg-indigo-50 rounded-lg p-3 mb-4 text-xs">
         <p className="font-medium text-indigo-700 mb-0.5">Required column: <code className="bg-white px-1 rounded">linkedin_url</code></p>

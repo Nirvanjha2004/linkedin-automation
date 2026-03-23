@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { bootstrapSession, getOwnProfile } from '@/lib/linkedin/client';
+import { checkAccountConnect, updateAccountCounters } from '@/lib/billing/entitlement';
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,6 +16,15 @@ export async function POST(request: NextRequest) {
 
     if (!liAt) {
       return NextResponse.json({ error: 'li_at is required' }, { status: 400 });
+    }
+
+    // Entitlement check: enforce free plan account limit
+    const entitlement = await checkAccountConnect(user.id);
+    if (!entitlement.allowed) {
+      return NextResponse.json(
+        { error: entitlement.reason, reason: entitlement.reason, upgrade_required: true },
+        { status: 403 }
+      );
     }
 
     // Step 1: Bootstrap JSESSIONID by hitting main LinkedIn page
@@ -100,6 +110,9 @@ export async function POST(request: NextRequest) {
       }
 
       account = inserted;
+
+      // New account connected — increment usage counters
+      await updateAccountCounters(user.id, 1);
     }
 
     return NextResponse.json({ success: true, account });
