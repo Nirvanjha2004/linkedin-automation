@@ -1,28 +1,9 @@
 import { randomUUID } from 'crypto';
 
 const VOYAGER = 'https://www.linkedin.com/voyager/api';
-const DEFAULT_MESSENGER_CONVERSATIONS_QUERY_ID =
-  process.env.LINKEDIN_MESSENGER_CONVERSATIONS_QUERY_ID ||
-  'messengerConversations.0d5e6781bbee71c3e51c8843c6519f48';
-const DEFAULT_MESSENGER_MESSAGES_QUERY_ID =
+const MESSENGER_MESSAGES_QUERY_ID =
   process.env.LINKEDIN_MESSENGER_MESSAGES_QUERY_ID ||
   'messengerMessages.5846eeb71c981f11e0134cb6626cc314';
-
-const MESSENGER_CONVERSATIONS_QUERY_ID_CANDIDATES = [
-  ...(process.env.LINKEDIN_MESSENGER_CONVERSATIONS_QUERY_IDS || '')
-    .split(',')
-    .map((v) => v.trim())
-    .filter(Boolean),
-  DEFAULT_MESSENGER_CONVERSATIONS_QUERY_ID,
-];
-
-const MESSENGER_MESSAGES_QUERY_ID_CANDIDATES = [
-  ...(process.env.LINKEDIN_MESSENGER_MESSAGES_QUERY_IDS || '')
-    .split(',')
-    .map((v) => v.trim())
-    .filter(Boolean),
-  DEFAULT_MESSENGER_MESSAGES_QUERY_ID,
-];
 
 const HARDCODED_MESSENGER_CONVERSATIONS_QUERY_ID =
   'messengerConversations.74c17e85611b60b7ba2700481151a316';
@@ -45,7 +26,6 @@ export type LinkedInErrorCode =
   | 'rate_limited'          // 429 or weekly invitation quota hit
   | 'note_too_long'         // Connection note > 300 chars
   | 'not_connected'         // Cannot message — not a 1st-degree connection yet
-  | 'session_expired'       // JSESSIONID expired and could not be refreshed
   | 'network_error'         // Cloudflare / proxy HTML response
   | 'unknown_error';
 
@@ -135,6 +115,10 @@ function buildHeaders(
 function buildCookie(liAt: string, jsessionid: string): string {
   // Cookie requires quoted JSESSIONID; csrf-token header uses the bare value
   return `li_at=${liAt}; JSESSIONID="${jsessionid}"`;
+}
+
+function strictEncode(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 function findStringByPrefix(value: unknown, prefix: string): string | null {
@@ -393,9 +377,6 @@ export class LinkedInClient {
   /** The account owner's own fsd_profile URN — used as mailboxUrn in messages */
   private profileUrn: string;
   private onSessionRefresh: OnSessionRefresh | null;
-  private discoveredConversationQueryIds: string[] = [];
-  private discoveredMessageQueryIds: string[] = [];
-  private queryDiscoveryAttempted = false;
 
   constructor(
     liAt: string,
@@ -404,7 +385,7 @@ export class LinkedInClient {
     onSessionRefresh: OnSessionRefresh | null = null
   ) {
     this.liAt = liAt;
-    this.jsessionid = jsessionid;
+    this.jsessionid = jsessionid.replace(/"/g, '');
     this.profileUrn = profileUrn;
     this.onSessionRefresh = onSessionRefresh;
   }
@@ -417,72 +398,17 @@ export class LinkedInClient {
     return { ...buildHeaders(this.jsessionid, extra), Cookie: this.cookie };
   }
 
-  private mailboxUrnCandidates(): string[] {
-    const candidates = new Set<string>();
-    const urn = (this.profileUrn || '').trim();
-    if (!urn) return [];
-
-    candidates.add(urn);
-    candidates.add(`"${urn}"`);
-
-    if (urn.startsWith('urn:li:member:')) {
-      const id = urn.replace('urn:li:member:', '');
-      candidates.add(`urn:li:fsd_profile:${id}`);
-      candidates.add(`"urn:li:fsd_profile:${id}"`);
+  private async fetchWithSessionRefresh(makeRequest: () => Promise<Response>): Promise<Response> {
+    let response = await makeRequest();
+    if ((response.status === 401 || response.status === 403) && await this.tryRefreshSession()) {
+      response = await makeRequest();
     }
-
-    if (urn.startsWith('urn:li:fs_miniProfile:')) {
-      const id = urn.replace('urn:li:fs_miniProfile:', '');
-      candidates.add(`urn:li:fsd_profile:${id}`);
-      candidates.add(`"urn:li:fsd_profile:${id}"`);
-    }
-
-    return Array.from(candidates);
+    return response;
   }
 
-  private async discoverMessagingQueryIds(): Promise<void> {
-    if (this.queryDiscoveryAttempted) return;
-    this.queryDiscoveryAttempted = true;
-
-    try {
-      const res = await fetch('https://www.linkedin.com/messaging/', {
-        method: 'GET',
-        headers: {
-          Cookie: this.cookie,
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.8',
-          'csrf-token': this.jsessionid,
-          referer: 'https://www.linkedin.com/',
-        },
-      });
-
-      if (!res.ok) return;
-      const html = await res.text();
-
-      const convMatches = html.match(/messengerConversations\.[a-f0-9]{32}/gi) || [];
-      const msgMatches = html.match(/messengerMessages\.[a-f0-9]{32}/gi) || [];
-
-      this.discoveredConversationQueryIds = Array.from(new Set(convMatches));
-      this.discoveredMessageQueryIds = Array.from(new Set(msgMatches));
-    } catch {
-      // Best-effort discovery only.
-    }
-  }
-
-  private conversationQueryIdCandidates(): string[] {
-    return Array.from(new Set([
-      ...this.discoveredConversationQueryIds,
-      ...MESSENGER_CONVERSATIONS_QUERY_ID_CANDIDATES,
-    ]));
-  }
-
-  private messageQueryIdCandidates(): string[] {
-    return Array.from(new Set([
-      ...this.discoveredMessageQueryIds,
-      ...MESSENGER_MESSAGES_QUERY_ID_CANDIDATES,
-    ]));
+  private async parseErrorFromResponse(response: Response): Promise<ParsedError> {
+    const bodyText = await response.text().catch(() => '');
+    return parseLinkedInError(response.status, bodyText);
   }
 
   /**
@@ -492,6 +418,7 @@ export class LinkedInClient {
   private async tryRefreshSession(): Promise<boolean> {
     try {
       this.jsessionid = await bootstrapSession(this.liAt);
+      this.jsessionid = this.jsessionid.replace(/"/g, '');
       if (this.onSessionRefresh) await this.onSessionRefresh(this.jsessionid);
       return true;
     } catch {
@@ -509,16 +436,10 @@ export class LinkedInClient {
     const vanityName = extractLinkedInIdentifier(linkedinUrl);
     const url = `${VOYAGER}/graphql?variables=(vanityName:${vanityName})&queryId=${PROFILE_QUERY_ID}`;
 
-    let res = await fetch(url, { headers: this.headers() });
-
-    if (res.status === 401 || res.status === 403) {
-      if (await this.tryRefreshSession()) {
-        res = await fetch(url, { headers: this.headers() });
-      }
-    }
+    const res = await this.fetchWithSessionRefresh(() => fetch(url, { headers: this.headers() }));
 
     if (!res.ok) {
-      const { code, message } = parseLinkedInError(res.status, await res.text());
+      const { code, message } = await this.parseErrorFromResponse(res);
       return { success: false, error: code, message };
     }
 
@@ -657,23 +578,16 @@ export class LinkedInClient {
       body: JSON.stringify(body),
     };
 
-    let res = await fetch(url, fetchOptions);
-
-    // Handle session expiration by attempting a refresh
-    if (res.status === 401 || res.status === 403) {
-      if (await this.tryRefreshSession()) {
-        // Re-generate headers with the new jsessionid/csrf-token
-        fetchOptions.headers = this.headers({
+    const res = await this.fetchWithSessionRefresh(() => fetch(url, {
+      ...fetchOptions,
+      headers: this.headers({
           'content-type': 'application/json; charset=UTF-8',
           'accept': 'application/vnd.linkedin.normalized+json+2.1'
-        });
-        res = await fetch(url, fetchOptions);
-      }
-    }
+      }),
+    }));
 
     if (!res.ok) {
-      const resBody = await res.json().catch(() => ({}));
-      const { code, message } = parseLinkedInError(res.status, resBody);
+      const { code, message } = await this.parseErrorFromResponse(res);
 
       if (code === 'already_invited') {
         return { success: false, alreadyInvited: true, error: code, message, profileData };
@@ -712,8 +626,6 @@ export class LinkedInClient {
       recipientUrn = (profileResult.data as any)?.entityUrn ?? null;
     }
 
-    console.log("[sendMessage] Resolved recipientUrn:", recipientUrn);
-
     if (!recipientUrn) {
       return { success: false, error: 'unknown_error', message: 'Could not resolve recipient URN' };
     }
@@ -751,9 +663,6 @@ export class LinkedInClient {
       body.hostRecipientUrns = [recipientUrn];
     }
 
-    console.log("[sendMessage] Request body:", JSON.stringify(body, null, 2));
-    console.log("[sendMessage] Request URL:", url);
-
     const extraHeaders = {
       'content-type': 'text/plain;charset=UTF-8',
       'origin': 'https://www.linkedin.com',
@@ -766,36 +675,18 @@ export class LinkedInClient {
       'x-li-page-instance': 'urn:li:page:d_flagship3_profile_view_base;Ur5/eTnHQPqPg45p6GrC9A==',
     };
 
-    let res = await fetch(url, {
+    const res = await this.fetchWithSessionRefresh(() => fetch(url, {
       method: 'POST',
       headers: this.headers(extraHeaders),
       body: JSON.stringify(body),
-    });
-
-    console.log("[sendMessage] Response status:", res.status);
-
-    if (res.status === 401 || res.status === 403) {
-      console.log("[sendMessage] Auth error, attempting session refresh...");
-      if (await this.tryRefreshSession()) {
-        console.log("[sendMessage] Session refreshed, retrying...");
-        res = await fetch(url, {
-          method: 'POST',
-          headers: this.headers(extraHeaders),
-          body: JSON.stringify(body),
-        });
-        console.log("[sendMessage] Retry response status:", res.status);
-      }
-    }
+    }));
 
     if (!res.ok) {
-      const resBody = await res.json().catch(() => ({}));
-      console.log("[sendMessage] Error response body:", JSON.stringify(resBody, null, 2));
-      const { code, message } = parseLinkedInError(res.status, resBody);
+      const { code, message } = await this.parseErrorFromResponse(res);
       return { success: false, error: code, message };
     }
 
     const responseData = await res.json();
-    console.log("[sendMessage] Success:", JSON.stringify(responseData, null, 2));
     return { success: true, data: responseData };
   }
 
@@ -807,28 +698,16 @@ export class LinkedInClient {
     const idsExpr = `List(${conversationUrns.join(',')})`;
     const url = `${VOYAGER}/voyagerMessagingDashMessengerConversations?ids=${encodeURIComponent(idsExpr)}`;
 
-    let res = await fetch(url, {
+    const res = await this.fetchWithSessionRefresh(() => fetch(url, {
       method: 'GET',
       headers: this.headers({
         accept: 'application/json',
         'content-type': 'text/plain;charset=UTF-8',
       }),
-    });
-
-    if (res.status === 401 || res.status === 403) {
-      if (await this.tryRefreshSession()) {
-        res = await fetch(url, {
-          method: 'GET',
-          headers: this.headers({
-            accept: 'application/json',
-            'content-type': 'text/plain;charset=UTF-8',
-          }),
-        });
-      }
-    }
+    }));
 
     if (!res.ok) {
-      const { code, message } = parseLinkedInError(res.status, await res.text());
+      const { code, message } = await this.parseErrorFromResponse(res);
       return { success: false, error: code, message };
     }
 
@@ -836,8 +715,7 @@ export class LinkedInClient {
     return { success: true, data };
   }
 
-  async fetchMailboxConversations(params?: { start?: number; count?: number; syncToken?: string }): Promise<LinkedInResponse> {
-    void params;
+  async fetchMailboxConversations(_params?: { start?: number; count?: number; syncToken?: string }): Promise<LinkedInResponse> {
 
     const mailboxUrn = (this.profileUrn || '').trim();
     if (!mailboxUrn) {
@@ -850,50 +728,34 @@ export class LinkedInClient {
     // Constructing the exact URL that worked before
     const url = `${VOYAGER}/voyagerMessagingGraphQL/graphql?queryId=${HARDCODED_MESSENGER_CONVERSATIONS_QUERY_ID}&variables=${workingVariables}`;
 
-    // Safely remove any accidental extra quotes from the JSESSIONID just in case it was saved weirdly in the DB
-    const cleanJsessionId = (this.jsessionid || '').replace(/"/g, '');
-
-    const minimalHeaders = {
-      'accept': 'application/graphql',
-      'accept-language': 'en-US,en;q=0.8',
-      'cache-control': 'no-cache',
-      'x-restli-protocol-version': '2.0.0',
-      'csrf-token': cleanJsessionId, // Mandatory for preventing 403 Forbidden
-      'cookie': `li_at=${this.liAt}; JSESSIONID="${cleanJsessionId}";` 
-    };
-
     try {
-      const res = await fetch(url, {
+      const res = await this.fetchWithSessionRefresh(() => fetch(url, {
         method: 'GET',
-        headers: minimalHeaders,
-      });
+        headers: {
+          'accept': 'application/graphql',
+          'accept-language': 'en-US,en;q=0.8',
+          'cache-control': 'no-cache',
+          'x-restli-protocol-version': '2.0.0',
+          'csrf-token': this.jsessionid,
+          'cookie': buildCookie(this.liAt, this.jsessionid),
+        },
+      }));
 
-      // 2. Safely check if the response is OK FIRST before trying to parse JSON
       if (res.ok) {
         const data = await res.json();
-        console.log("[fetchMailboxConversations] Success! Data fetched.");
         return { success: true, data };
       }
 
-      // 3. If it's an error (400, 401, 403, etc.), read as text so it doesn't crash on HTML error pages
-      const bodyText = await res.text().catch(() => '');
-      console.warn(`[fetchMailboxConversations] Warning: HTTP ${res.status}`, bodyText);
-
-      // Pass it to your custom error parser
-      // @ts-ignore
-      const parsed = parseLinkedInError(res.status, bodyText);
+      const parsed = await this.parseErrorFromResponse(res);
       
       return { 
         success: false, 
-        error: parsed.code || `HTTP_${res.status}`, 
-        message: parsed.message || `HTTP ${res.status} error from LinkedIn` 
+        error: parsed.code,
+        message: parsed.message,
       };
 
-    } catch (error: any) {
-      // 4. Clean catch block for actual network failures (e.g., internet down, DNS issues)
+    } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Mailbox request failed';
-      console.error("[fetchMailboxConversations] Network or execution error:", message);
-      
       return { success: false, error: 'network_error', message };
     }
   }
@@ -901,76 +763,48 @@ export class LinkedInClient {
     conversationUrn: string,
     params?: { syncToken?: string }
   ): Promise<LinkedInResponse> {
-
-    // Assuming VOYAGER is defined in your class/file scope
-    const VOYAGER = 'https://www.linkedin.com/voyager/api'; 
-    const queryId = 'messengerMessages.5846eeb71c981f11e0134cb6626cc314';
-
-    // 1. THE FIX: Strict URI Encoder
-    // Standard encodeURIComponent ignores ()!'* which breaks LinkedIn's GraphQL parser.
-    // This helper forces the encoding of those specific characters.
-    const strictEncode = (str: string) => 
-      encodeURIComponent(str).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
-
-    // 2. Format variables using the strict encoder for the values, 
-    // but LEAVE the outer brackets unencoded to match the cURL exactly.
     const encodedUrn = strictEncode(conversationUrn);
     const variablesString = params?.syncToken 
       ? `(conversationUrn:${encodedUrn},syncToken:${strictEncode(params.syncToken)})`
       : `(conversationUrn:${encodedUrn})`;
 
-    // 3. Construct URL manually to preserve the raw outer parentheses of variablesString
-    const url = `${VOYAGER}/voyagerMessagingGraphQL/graphql?queryId=${queryId}&variables=${variablesString}`;
+    const url = `${VOYAGER}/voyagerMessagingGraphQL/graphql?queryId=${MESSENGER_MESSAGES_QUERY_ID}&variables=${variablesString}`;
 
-    // Dynamically extract the thread ID from the URN to build the exact referer URL.
     const threadIdMatch = conversationUrn.match(/,([^,)]+)\)$/);
     const threadId = threadIdMatch ? threadIdMatch[1] : conversationUrn.replace(/.*[:,]/, '').replace(/\)$/, '');
     const refererUrl = threadId
       ? `https://www.linkedin.com/messaging/thread/${threadId}/`
       : 'https://www.linkedin.com/messaging/';
 
-    // Safely format the JSESSIONID (remove quotes for csrf-token header)
-    const cleanJsessionId = (this.jsessionid || '').replace(/"/g, '');
-
-    // 4. Minimal, exact headers
-    const minimalHeaders = {
-      'accept': 'application/graphql',
-      'accept-language': 'en-US,en;q=0.8',
-      'cache-control': 'no-cache',
-      'x-restli-protocol-version': '2.0.0',
-      'referer': refererUrl,
-      'csrf-token': cleanJsessionId, 
-      // Ensure the JSESSIONID cookie retains its quotation marks here
-      'cookie': `li_at=${this.liAt}; JSESSIONID="${cleanJsessionId}";`
-    };
-
     try {
-      const res = await fetch(url, {
+      const res = await this.fetchWithSessionRefresh(() => fetch(url, {
         method: 'GET',
-        headers: minimalHeaders,
-      });
+        headers: {
+          'accept': 'application/graphql',
+          'accept-language': 'en-US,en;q=0.8',
+          'cache-control': 'no-cache',
+          'x-restli-protocol-version': '2.0.0',
+          'referer': refererUrl,
+          'csrf-token': this.jsessionid,
+          'cookie': buildCookie(this.liAt, this.jsessionid),
+        },
+      }));
             
       if (res.ok) {
         const data = await res.json();
         return { success: true, data };
       }
 
-      const bodyText = await res.text().catch(() => '');
-      console.warn(`[fetchConversationMessages] HTTP ${res.status}`, bodyText);
-
-      // @ts-ignore
-      const parsed = parseLinkedInError(res.status, bodyText);
+      const parsed = await this.parseErrorFromResponse(res);
       
       return { 
         success: false, 
-        error: parsed?.code || `HTTP_${res.status}`, 
-        message: parsed?.message || `HTTP ${res.status} error from LinkedIn` 
+        error: parsed.code,
+        message: parsed.message,
       };
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Messages request failed';
-      console.error("[fetchConversationMessages] Network error:", message);
-      
       return { success: false, error: 'network_error', message };
     }
   }
@@ -1003,20 +837,12 @@ export class LinkedInClient {
   async getRecentConnections(): Promise<LinkedInResponse> {
     const url = `${VOYAGER}/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count=40&q=search&sortType=RECENTLY_ADDED`;
 
-    let res = await fetch(url, {
+    const res = await this.fetchWithSessionRefresh(() => fetch(url, {
       headers: this.headers({ 'x-li-deco-include-micro-schema': 'true' }),
-    });
-
-    if (res.status === 401 || res.status === 403) {
-      if (await this.tryRefreshSession()) {
-        res = await fetch(url, {
-          headers: this.headers({ 'x-li-deco-include-micro-schema': 'true' }),
-        });
-      }
-    }
+    }));
 
     if (!res.ok) {
-      const { code, message } = parseLinkedInError(res.status, await res.text());
+      const { code, message } = await this.parseErrorFromResponse(res);
       return { success: false, error: code, message };
     }
 

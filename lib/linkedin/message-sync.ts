@@ -42,6 +42,60 @@ interface ParsedMessage {
   sentAt: string;
 }
 
+type LinkedInAccountRow = {
+  id: string;
+  li_at: string | null;
+  jsessionid: string | null;
+  profile_urn: string | null;
+};
+
+type ConversationRow = {
+  id: string;
+  lead_id: string;
+  external_conversation_id: string;
+  unread_count: number;
+  last_message_at: string | null;
+  last_external_message_id: string | null;
+};
+
+type ExistingMessageRow = {
+  external_message_id: string;
+  sender_type: 'linkedin_account' | 'lead';
+  direction: 'outbound' | 'inbound';
+};
+
+type LeadCampaign = {
+  linkedin_account_id?: string | null;
+};
+
+type LeadRow = {
+  id: string;
+  provider_id: string | null;
+  campaigns: LeadCampaign | LeadCampaign[] | null;
+};
+
+type LocalConversationState = {
+  id: string;
+  lead_id: string;
+  unread_count: number;
+  last_message_at: string | null;
+  last_external_message_id: string | null;
+};
+
+type LeadIndexRow = {
+  preferred?: string;
+  fallback?: string;
+};
+
+const MESSAGE_URN_PREFIXES = ['urn:li:msg_message:', 'urn:li:messenger_message:'] as const;
+const PROFILE_URN_PREFIXES = [
+  'urn:li:msg_messagingParticipant:',
+  'urn:li:messagingMember:',
+  'urn:li:fsd_profile:',
+  'urn:li:member:',
+  'urn:li:fs_miniProfile:',
+] as const;
+
 function normalizeProfileUrn(value: string | null | undefined): string | null {
   if (!value) return null;
 
@@ -73,28 +127,43 @@ function normalizeProfileUrn(value: string | null | undefined): string | null {
   return urn;
 }
 
-function extractMailboxSyncToken(payload: unknown): string | null {
-  const visited = new Set<unknown>();
+function walkPayload(value: unknown, visitor: (value: unknown) => boolean | void, visited = new Set<unknown>()): boolean {
+  const shouldStop = visitor(value);
+  if (shouldStop === true) return true;
 
-  function walk(value: unknown): string | null {
-    if (!value || typeof value !== 'object') return null;
-    if (visited.has(value)) return null;
-    visited.add(value);
+  if (!value || typeof value !== 'object') return false;
+  if (visited.has(value)) return false;
+  visited.add(value);
 
-    const obj = value as Record<string, unknown>;
-    const direct = obj.newSyncToken;
-    if (typeof direct === 'string' && direct.trim()) return direct;
-
-    for (const child of Object.values(obj)) {
-      if (typeof child === 'string') continue;
-      const found = walk(child);
-      if (found) return found;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (walkPayload(item, visitor, visited)) return true;
     }
-
-    return null;
+    return false;
   }
 
-  return walk(payload);
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    if (walkPayload(child, visitor, visited)) return true;
+  }
+
+  return false;
+}
+
+function hasAnyPrefix(value: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => value.startsWith(prefix));
+}
+
+function extractMailboxSyncToken(payload: unknown): string | null {
+  let token: string | null = null;
+  walkPayload(payload, (node) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    const direct = (node as Record<string, unknown>).newSyncToken;
+    if (typeof direct === 'string' && direct.trim()) {
+      token = direct;
+      return true;
+    }
+  });
+  return token;
 }
 
 function escapeHtml(value: string): string {
@@ -106,74 +175,35 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function collectObjects(
-  value: unknown,
-  predicate: (obj: Record<string, unknown>) => boolean,
-  output: Record<string, unknown>[],
-  visited = new Set<unknown>()
-): void {
-  if (!value || typeof value !== 'object') return;
-  if (visited.has(value)) return;
-  visited.add(value);
-
-  if (Array.isArray(value)) {
-    for (const item of value) collectObjects(item, predicate, output, visited);
-    return;
-  }
-
-  const obj = value as Record<string, unknown>;
-  if (predicate(obj)) output.push(obj);
-  for (const child of Object.values(obj)) {
-    collectObjects(child, predicate, output, visited);
-  }
+function collectObjects(value: unknown, predicate: (obj: Record<string, unknown>) => boolean): Record<string, unknown>[] {
+  const output: Record<string, unknown>[] = [];
+  walkPayload(value, (node) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    const obj = node as Record<string, unknown>;
+    if (predicate(obj)) output.push(obj);
+  });
+  return output;
 }
 
-function collectStringsByPrefix(
-  value: unknown, 
-  prefix: string, 
-  output: Set<string>,
-  visited = new Set<unknown>()
-): void {
-  if (typeof value === 'string') {
-    if (value.startsWith(prefix)) output.add(value);
-    return;
-  }
-
-  if (!value || typeof value !== 'object') return;
-  if (visited.has(value)) return;
-  visited.add(value);
-
-  if (Array.isArray(value)) {
-    for (const item of value) collectStringsByPrefix(item, prefix, output, visited);
-    return;
-  }
-
-  for (const child of Object.values(value as Record<string, unknown>)) {
-    collectStringsByPrefix(child, prefix, output, visited);
-  }
-}
-
-function findFirstStringByPrefix(value: unknown, prefix: string): string | null {
-  if (typeof value === 'string') {
-    return value.startsWith(prefix) ? value : null;
-  }
-
-  if (!value || typeof value !== 'object') return null;
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findFirstStringByPrefix(item, prefix);
-      if (found) return found;
+function collectStringsByPrefixes(value: unknown, prefixes: readonly string[]): Set<string> {
+  const output = new Set<string>();
+  walkPayload(value, (node) => {
+    if (typeof node === 'string' && hasAnyPrefix(node, prefixes)) {
+      output.add(node);
     }
-    return null;
-  }
+  });
+  return output;
+}
 
-  for (const child of Object.values(value as Record<string, unknown>)) {
-    const found = findFirstStringByPrefix(child, prefix);
-    if (found) return found;
-  }
-
-  return null;
+function findFirstStringByPrefixes(value: unknown, prefixes: readonly string[]): string | null {
+  let found: string | null = null;
+  walkPayload(value, (node) => {
+    if (typeof node === 'string' && hasAnyPrefix(node, prefixes)) {
+      found = node;
+      return true;
+    }
+  });
+  return found;
 }
 
 function toIsoDate(value: unknown): string | null {
@@ -198,8 +228,102 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
-function payloadHasObjectKeys(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function extractConversationPayloadFields(value: unknown): { lastMessageUrn: string | null; profileUrns: string[] } {
+  let lastMessageUrn: string | null = null;
+  const profileUrns = new Set<string>();
+
+  walkPayload(value, (node) => {
+    if (typeof node !== 'string') return;
+    if (!lastMessageUrn && hasAnyPrefix(node, MESSAGE_URN_PREFIXES)) {
+      lastMessageUrn = node;
+      return;
+    }
+    if (hasAnyPrefix(node, PROFILE_URN_PREFIXES)) {
+      profileUrns.add(node);
+    }
+  });
+
+  return {
+    lastMessageUrn,
+    profileUrns: Array.from(profileUrns),
+  };
+}
+
+function extractSenderProfileUrn(obj: Record<string, unknown>): string | null {
+  const senderData = obj.sender ?? obj.from;
+  const senderEntityUrn = (senderData as { entityUrn?: unknown } | undefined)?.entityUrn;
+
+  if (typeof senderEntityUrn === 'string' && hasAnyPrefix(senderEntityUrn, PROFILE_URN_PREFIXES)) {
+    return senderEntityUrn;
+  }
+
+  return (
+    findFirstStringByPrefixes(senderData, PROFILE_URN_PREFIXES) ||
+    findFirstStringByPrefixes(obj, PROFILE_URN_PREFIXES)
+  );
+}
+
+function normalizeCampaign(lead: LeadRow): LeadCampaign | null {
+  const campaign = lead.campaigns;
+  if (!campaign) return null;
+  return Array.isArray(campaign) ? campaign[0] ?? null : campaign;
+}
+
+function buildLeadIndex(leadRows: LeadRow[] | null | undefined, accountId: string): Map<string, LeadIndexRow> {
+  const index = new Map<string, LeadIndexRow>();
+
+  for (const lead of leadRows ?? []) {
+    const normalized = normalizeProfileUrn(lead.provider_id);
+    if (!normalized) continue;
+
+    const current = index.get(normalized) ?? {};
+    if (!current.fallback) {
+      current.fallback = lead.id;
+    }
+
+    const campaignAccountId = normalizeCampaign(lead)?.linkedin_account_id ?? null;
+    if (campaignAccountId === accountId) {
+      current.preferred = lead.id;
+    }
+
+    index.set(normalized, current);
+  }
+
+  return index;
+}
+
+function resolveLeadIdFromIndex(leadIndex: Map<string, LeadIndexRow>, participantProfileUrn: string | null): string | null {
+  const normalized = normalizeProfileUrn(participantProfileUrn);
+  if (!normalized) return null;
+
+  const row = leadIndex.get(normalized);
+  if (!row) return null;
+
+  return row.preferred ?? row.fallback ?? null;
+}
+
+function shouldFetchMessages(
+  parsed: ParsedConversation,
+  local: LocalConversationState,
+  newlyInsertedConversationUrns: Set<string>
+): boolean {
+  if (newlyInsertedConversationUrns.has(parsed.conversationUrn)) {
+    return true;
+  }
+
+  if (!local.last_external_message_id || !local.last_message_at) {
+    return true;
+  }
+
+  if (parsed.lastMessageUrn && local.last_external_message_id !== parsed.lastMessageUrn) {
+    return true;
+  }
+
+  if (!local.last_message_at || !parsed.lastMessageAt) {
+    return true;
+  }
+
+  return new Date(parsed.lastMessageAt).getTime() > new Date(local.last_message_at).getTime();
 }
 
 function pickMessageText(obj: Record<string, unknown>): string | null {
@@ -240,11 +364,9 @@ function pickMessageText(obj: Record<string, unknown>): string | null {
 
 function parseConversationPayload(payload: unknown, accountProfileUrn: string): ParsedConversation[] {
   const normalizedAccountProfileUrn = normalizeProfileUrn(accountProfileUrn) ?? accountProfileUrn;
-  const conversationObjects: Record<string, unknown>[] = [];
-  collectObjects(
+  const conversationObjects = collectObjects(
     payload,
-    (obj) => typeof obj.entityUrn === 'string' && obj.entityUrn.startsWith('urn:li:msg_conversation:'),
-    conversationObjects
+    (obj) => typeof obj.entityUrn === 'string' && obj.entityUrn.startsWith('urn:li:msg_conversation:')
   );
 
   const byUrn = new Map<string, ParsedConversation>();
@@ -264,14 +386,9 @@ function parseConversationPayload(payload: unknown, accountProfileUrn: string): 
       toIsoDate(obj.createdAt) ||
       null;
 
-    const messageUrns = new Set<string>();
-    collectStringsByPrefix(obj, 'urn:li:msg_message:', messageUrns);
-    const profileUrns = new Set<string>();
-    collectStringsByPrefix(obj, 'urn:li:fsd_profile:', profileUrns);
-    collectStringsByPrefix(obj, 'urn:li:member:', profileUrns);
-    collectStringsByPrefix(obj, 'urn:li:fs_miniProfile:', profileUrns);
+    const extracted = extractConversationPayloadFields(obj);
 
-    const normalizedProfileUrns = Array.from(profileUrns)
+    const normalizedProfileUrns = extracted.profileUrns
       .map((urn) => normalizeProfileUrn(urn) ?? urn)
       .filter(Boolean);
 
@@ -281,7 +398,7 @@ function parseConversationPayload(payload: unknown, accountProfileUrn: string): 
       conversationUrn,
       unreadCount,
       lastMessageAt,
-      lastMessageUrn: Array.from(messageUrns)[0] ?? null,
+      lastMessageUrn: extracted.lastMessageUrn,
       participantProfileUrn,
     });
   }
@@ -291,16 +408,14 @@ function parseConversationPayload(payload: unknown, accountProfileUrn: string): 
 
 function parseMessagePayload(payload: unknown, accountProfileUrn: string): ParsedMessage[] {
   const normalizedAccountProfileUrn = normalizeProfileUrn(accountProfileUrn) ?? accountProfileUrn;
-  const messageObjects: Record<string, unknown>[] = [];
-  collectObjects(
+  const messageObjects = collectObjects(
     payload,
     (obj) =>
       (typeof obj.entityUrn === 'string' && obj.entityUrn.startsWith('urn:li:msg_message:')) ||
       (typeof obj.entityUrn === 'string' && obj.entityUrn.startsWith('urn:li:messenger_message:')) ||
       (typeof obj.dashEntityUrn === 'string' && obj.dashEntityUrn.startsWith('urn:li:msg_message:')) ||
       (typeof obj.dashEntityUrn === 'string' && obj.dashEntityUrn.startsWith('urn:li:messenger_message:')) ||
-      (typeof obj.$type === 'string' && obj.$type.toLowerCase().includes('messengermessage')),
-    messageObjects
+      (typeof obj.$type === 'string' && obj.$type.toLowerCase().includes('messengermessage'))
   );
 
   const byUrn = new Map<string, ParsedMessage>();
@@ -329,28 +444,7 @@ function parseMessagePayload(payload: unknown, accountProfileUrn: string): Parse
       toIsoDate(obj.lastModifiedAt) ||
       new Date().toISOString();
 
-    const profileUrns = new Set<string>();
-    collectStringsByPrefix(obj, 'urn:li:fsd_profile:', profileUrns);
-    collectStringsByPrefix(obj, 'urn:li:member:', profileUrns);
-    collectStringsByPrefix(obj, 'urn:li:fs_miniProfile:', profileUrns);
-    collectStringsByPrefix(obj, 'urn:li:msg_messagingParticipant:', profileUrns);
-    collectStringsByPrefix(obj, 'urn:li:messagingMember:', profileUrns);
-
-    const senderData = obj.sender ?? obj.from;
-    const senderProfileUrnRaw =
-      (senderData as { entityUrn?: string } | undefined)?.entityUrn ||
-      findFirstStringByPrefix(senderData, 'urn:li:msg_messagingParticipant:') ||
-      findFirstStringByPrefix(senderData, 'urn:li:messagingMember:') ||
-      findFirstStringByPrefix(senderData, 'urn:li:fsd_profile:') ||
-      findFirstStringByPrefix(senderData, 'urn:li:member:') ||
-      findFirstStringByPrefix(senderData, 'urn:li:fs_miniProfile:') ||
-      findFirstStringByPrefix(obj, 'urn:li:msg_messagingParticipant:') ||
-      findFirstStringByPrefix(obj, 'urn:li:messagingMember:') ||
-      findFirstStringByPrefix(obj, 'urn:li:fsd_profile:') ||
-      findFirstStringByPrefix(obj, 'urn:li:member:') ||
-      findFirstStringByPrefix(obj, 'urn:li:fs_miniProfile:') ||
-      Array.from(profileUrns)[0] ||
-      null;
+    const senderProfileUrnRaw = extractSenderProfileUrn(obj);
 
     const senderProfileUrn = normalizeProfileUrn(senderProfileUrnRaw) ?? senderProfileUrnRaw;
 
@@ -400,47 +494,11 @@ export async function syncMessagesForUser(
   let readStatusChanges = 0;
   let syncedAccounts = 0;
 
-  for (let i = 0; i < accounts.length; i++) {
-    const account = accounts[i];
+  for (const account of accounts as LinkedInAccountRow[]) {
+    const accountIdValue = String(account.id);
 
     try {
       syncedAccounts += 1;
-
-      const diagnostics = {
-        conversationsToFetchMessages: 0,
-        skippedMessageFetchNoLocal: 0,
-        skippedMessageFetchNotNewer: 0,
-        messageFetchFailed: 0,
-        messageFetchFallbackUsed: 0,
-        parsedMessagesTotal: 0,
-        incrementalMessagesTotal: 0,
-        duplicateMessagesSkipped: 0,
-        correctedExistingMessages: 0,
-        insertedMessages: 0,
-      };
-
-      const messageDebug = {
-        accountId: String(account.id),
-        fetchAttempts: 0,
-        fetchSuccess: 0,
-        fetchFailures: [] as Array<{ conversationUrn: string; error: string }>,
-        parsedZeroCount: 0,
-        incrementalZeroCount: 0,
-        duplicateOnlyCount: 0,
-        insertAttempts: 0,
-        insertSuccess: 0,
-        insertFailures: [] as Array<{ conversationUrn: string; error: string; rowsAttempted: number }>,
-        sampleConversations: [] as Array<{
-          conversationUrn: string;
-          localConversationId: string;
-          sinceIso: string | null;
-          parsedCount: number;
-          incrementalCount: number;
-          dedupedCount: number;
-          duplicateCount: number;
-          insertedCount: number;
-        }>,
-      };
 
       if (!account.li_at || !account.jsessionid || !account.profile_urn) {
         throw new Error('Missing LinkedIn credentials for account sync');
@@ -456,14 +514,14 @@ export async function syncMessagesForUser(
           await supabase
             .from('linkedin_accounts')
             .update({ jsessionid: newJsessionid })
-            .eq('id', account.id);
+            .eq('id', accountIdValue);
         }
       );
 
       const { data: existingSyncState } = await supabase
         .from('message_sync_state')
         .select('last_sync_cursor')
-        .eq('linkedin_account_id', account.id)
+        .eq('linkedin_account_id', accountIdValue)
         .maybeSingle();
 
       let nextSyncCursor: string | null = existingSyncState?.last_sync_cursor ?? null;
@@ -476,11 +534,8 @@ export async function syncMessagesForUser(
         throw new Error(mailboxResponse.message || 'Failed to fetch mailbox conversations');
       }
 
-      const discoveredConversations = new Map<string, ParsedConversation>();
       const parsedMailboxRows = parseConversationPayload(mailboxResponse.data, account.profile_urn);
-      for (const row of parsedMailboxRows) {
-        discoveredConversations.set(row.conversationUrn, row);
-      }
+      const discoveredConversations = new Map(parsedMailboxRows.map((row) => [row.conversationUrn, row]));
 
       const returnedSyncToken = extractMailboxSyncToken(mailboxResponse.data);
       if (returnedSyncToken) {
@@ -490,26 +545,20 @@ export async function syncMessagesForUser(
       const parsedConversations = Array.from(discoveredConversations.values());
       const mailboxUrns = parsedConversations.map((c) => c.conversationUrn);
 
-      let localConversations: any[] = [];
+      let localConversations: ConversationRow[] = [];
       if (mailboxUrns.length > 0) {
         const { data: matchedConversations, error: localConversationError } = await supabase
           .from('conversations')
           .select('id, lead_id, external_conversation_id, unread_count, last_message_at, last_external_message_id')
           .eq('user_id', userId)
-          .eq('linkedin_account_id', account.id)
+          .eq('linkedin_account_id', accountIdValue)
           .in('external_conversation_id', mailboxUrns);
 
         if (localConversationError) throw localConversationError;
-        localConversations = matchedConversations || [];
+        localConversations = (matchedConversations ?? []) as ConversationRow[];
       }
 
-      const byUrn = new Map<string, {
-        id: string;
-        lead_id: string;
-        unread_count: number;
-        last_message_at: string | null;
-        last_external_message_id: string | null;
-      }>();
+      const byUrn = new Map<string, LocalConversationState>();
       for (const row of localConversations) {
         if (!row.external_conversation_id) continue;
         byUrn.set(row.external_conversation_id, {
@@ -532,22 +581,7 @@ export async function syncMessagesForUser(
         .not('provider_id', 'is', null)
         .limit(5000);
 
-      const leadByProfileUrn = new Map<string, string>();
-      const fallbackLeadByProfileUrn = new Map<string, string>();
-      for (const lead of leadRows ?? []) {
-        const normalized = normalizeProfileUrn(lead.provider_id);
-        if (!normalized) continue;
-
-        const campaignAccountId =
-          (lead.campaigns as { linkedin_account_id?: string } | null)?.linkedin_account_id ?? null;
-        if (campaignAccountId === account.id) {
-          leadByProfileUrn.set(normalized, lead.id);
-        }
-
-        if (!fallbackLeadByProfileUrn.has(normalized)) {
-          fallbackLeadByProfileUrn.set(normalized, lead.id);
-        }
-      }
+      const leadIndex = buildLeadIndex((leadRows ?? []) as LeadRow[], accountIdValue);
 
       const newlyInsertedConversationUrns = new Set<string>();
 
@@ -555,18 +589,14 @@ export async function syncMessagesForUser(
         let local = byUrn.get(parsed.conversationUrn);
 
         if (!local && parsed.participantProfileUrn) {
-          const normalizedParticipantUrn = normalizeProfileUrn(parsed.participantProfileUrn) ?? '';
-          let leadId = leadByProfileUrn.get(normalizedParticipantUrn);
-          if (!leadId) {
-            leadId = fallbackLeadByProfileUrn.get(normalizedParticipantUrn);
-          }
+          const leadId = resolveLeadIdFromIndex(leadIndex, parsed.participantProfileUrn);
 
           if (leadId) {
             const { data: insertedConversation, error: insertConversationError } = await supabase
               .from('conversations')
               .insert({
                 user_id: userId,
-                linkedin_account_id: account.id,
+                linkedin_account_id: accountIdValue,
                 lead_id: leadId,
                 external_conversation_id: parsed.conversationUrn,
                 unread_count: parsed.unreadCount,
@@ -577,7 +607,13 @@ export async function syncMessagesForUser(
               .single();
 
             if (!insertConversationError && insertedConversation) {
-              local = insertedConversation;
+              local = {
+                id: insertedConversation.id,
+                lead_id: insertedConversation.lead_id,
+                unread_count: insertedConversation.unread_count,
+                last_message_at: insertedConversation.last_message_at,
+                last_external_message_id: parsed.lastMessageUrn,
+              };
               byUrn.set(parsed.conversationUrn, {
                 id: insertedConversation.id,
                 lead_id: insertedConversation.lead_id,
@@ -613,103 +649,36 @@ export async function syncMessagesForUser(
       const conversationsToFetch: ParsedConversation[] = [];
       for (const parsed of parsedConversations) {
         const local = byUrn.get(parsed.conversationUrn);
-        if (!local) {
-          diagnostics.skippedMessageFetchNoLocal += 1;
-          continue;
-        }
-
-        if (newlyInsertedConversationUrns.has(parsed.conversationUrn)) {
+        if (!local) continue;
+        if (shouldFetchMessages(parsed, local, newlyInsertedConversationUrns)) {
           conversationsToFetch.push(parsed);
-          continue;
-        }
-
-        if (!local.last_external_message_id || !local.last_message_at) {
-          conversationsToFetch.push(parsed);
-          continue;
-        }
-
-        if (parsed.lastMessageUrn && local.last_external_message_id !== parsed.lastMessageUrn) {
-          conversationsToFetch.push(parsed);
-          continue;
-        }
-
-        if (!local.last_message_at || !parsed.lastMessageAt) {
-          conversationsToFetch.push(parsed);
-          continue;
-        }
-
-        if (new Date(parsed.lastMessageAt).getTime() > new Date(local.last_message_at).getTime()) {
-          conversationsToFetch.push(parsed);
-        } else {
-          diagnostics.skippedMessageFetchNotNewer += 1;
         }
       }
-      diagnostics.conversationsToFetchMessages = conversationsToFetch.length;
 
       for (const parsed of conversationsToFetch) {
         const local = byUrn.get(parsed.conversationUrn)!;
-        messageDebug.fetchAttempts += 1;
 
         let messageResponse = await client.fetchConversationMessages(parsed.conversationUrn);
 
         if (!messageResponse.success) {
           const fallbackResponse = await client.fetchConversationsByIds([parsed.conversationUrn]);
           if (fallbackResponse.success) {
-            diagnostics.messageFetchFallbackUsed += 1;
-            console.log(
-              `[MessageSync][messages][account=${account.id}] fetch_fallback_used conversation=${parsed.conversationUrn}`
-            );
             messageResponse = fallbackResponse;
           }
         }
 
         if (!messageResponse.success) {
-          diagnostics.messageFetchFailed += 1;
-          messageDebug.fetchFailures.push({
-            conversationUrn: parsed.conversationUrn,
-            error: messageResponse.message || 'Unknown message fetch failure',
-          });
-          console.log(
-            `[MessageSync][messages][account=${account.id}] fetch_failed conversation=${parsed.conversationUrn} error=${messageResponse.message || 'Unknown message fetch failure'}`
-          );
           continue;
         }
-        messageDebug.fetchSuccess += 1;
 
         const parsedMessages = parseMessagePayload(messageResponse.data, account.profile_urn);
-        diagnostics.parsedMessagesTotal += parsedMessages.length;
 
-        if (!parsedMessages.length) {
-          messageDebug.parsedZeroCount += 1;
-          const topLevelKeys =
-            payloadHasObjectKeys(messageResponse.data)
-              ? Object.keys(messageResponse.data as Record<string, unknown>).slice(0, 20)
-              : [];
-          const messageUrnCandidates = new Set<string>();
-          collectStringsByPrefix(messageResponse.data, 'urn:li:msg_message:', messageUrnCandidates);
-          collectStringsByPrefix(messageResponse.data, 'urn:li:messenger_message:', messageUrnCandidates);
-
-          console.log(
-            `[MessageSync][messages][account=${account.id}] parsed_zero conversation=${parsed.conversationUrn} localConversationId=${local.id} topLevelKeys=${JSON.stringify(topLevelKeys)} messageUrnCandidates=${JSON.stringify(Array.from(messageUrnCandidates).slice(0, 10))}`
-          );
-        }
-
-        // ✅ FIXED: Nullify the filter if this is a brand new conversation
         const isNewConversation = newlyInsertedConversationUrns.has(parsed.conversationUrn);
         const sinceIso = isNewConversation ? null : local.last_message_at;
         
         const incrementalMessages = sinceIso
           ? parsedMessages.filter((msg) => new Date(msg.sentAt).getTime() >= new Date(sinceIso).getTime())
           : parsedMessages;
-          
-        diagnostics.incrementalMessagesTotal += incrementalMessages.length;
-
-        if (!incrementalMessages.length) {
-          messageDebug.incrementalZeroCount += 1;
-          console.log(
-            `[MessageSync][messages][account=${account.id}] incremental_zero conversation=${parsed.conversationUrn} localConversationId=${local.id} sinceIso=${sinceIso}`
-          );
-        }
 
         if (!incrementalMessages.length) continue;
 
@@ -719,12 +688,6 @@ export async function syncMessagesForUser(
           .select('external_message_id, sender_type, direction')
           .eq('conversation_id', local.id)
           .in('external_message_id', externalMessageIds);
-
-        type ExistingMessageRow = {
-          external_message_id: string;
-          sender_type: 'linkedin_account' | 'lead';
-          direction: 'outbound' | 'inbound';
-        };
 
         const existingByExternalId = new Map<string, ExistingMessageRow>(
           (existingMessages ?? []).map((row: ExistingMessageRow) => [row.external_message_id, row])
@@ -750,7 +713,6 @@ export async function syncMessagesForUser(
                 .eq('external_message_id', msg.messageUrn)
             )
           );
-          diagnostics.correctedExistingMessages += rowsToCorrect.length;
         }
 
         const rowsToInsert = incrementalMessages
@@ -771,60 +733,17 @@ export async function syncMessagesForUser(
             sent_at: msg.sentAt,
           }));
 
-        diagnostics.duplicateMessagesSkipped += incrementalMessages.length - rowsToInsert.length;
-
-        if (!rowsToInsert.length) {
-          messageDebug.duplicateOnlyCount += 1;
-          console.log(
-            `[MessageSync][messages][account=${account.id}] duplicate_only conversation=${parsed.conversationUrn} localConversationId=${local.id} incremental=${incrementalMessages.length}`
-          );
-        }
-
-        if (messageDebug.sampleConversations.length < 15) {
-          messageDebug.sampleConversations.push({
-            conversationUrn: parsed.conversationUrn,
-            localConversationId: local.id,
-            sinceIso,
-            parsedCount: parsedMessages.length,
-            incrementalCount: incrementalMessages.length,
-            dedupedCount: rowsToInsert.length,
-            duplicateCount: incrementalMessages.length - rowsToInsert.length,
-            insertedCount: 0,
-          });
-        }
-
         if (!rowsToInsert.length) continue;
 
-        messageDebug.insertAttempts += 1;
         const { error: insertError } = await supabase
           .from('messages')
           .insert(rowsToInsert);
 
         if (insertError) {
-          messageDebug.insertFailures.push({
-            conversationUrn: parsed.conversationUrn,
-            error: insertError.message,
-            rowsAttempted: rowsToInsert.length,
-          });
-          console.log(
-            `[MessageSync][messages][account=${account.id}] insert_failed conversation=${parsed.conversationUrn} localConversationId=${local.id} rows=${rowsToInsert.length} error=${insertError.message}`
-          );
           throw insertError;
         }
 
-        messageDebug.insertSuccess += 1;
-
         newMessages += rowsToInsert.length;
-        diagnostics.insertedMessages += rowsToInsert.length;
-
-        const sample = messageDebug.sampleConversations.find((entry) => entry.conversationUrn === parsed.conversationUrn);
-        if (sample) {
-          sample.insertedCount = rowsToInsert.length;
-        }
-
-        console.log(
-          `[MessageSync][messages][account=${account.id}] inserted conversation=${parsed.conversationUrn} localConversationId=${local.id} inserted=${rowsToInsert.length}`
-        );
 
         const latest = rowsToInsert[rowsToInsert.length - 1];
         await supabase
@@ -835,28 +754,18 @@ export async function syncMessagesForUser(
           })
           .eq('id', local.id)
           .eq('user_id', userId);
-      }
 
-      console.log(
-        `[MessageSync][messages][account=${account.id}] summary=${JSON.stringify({
-          conversationsToFetchMessages: diagnostics.conversationsToFetchMessages,
-          skippedMessageFetchNoLocal: diagnostics.skippedMessageFetchNoLocal,
-          skippedMessageFetchNotNewer: diagnostics.skippedMessageFetchNotNewer,
-          messageFetchFailed: diagnostics.messageFetchFailed,
-          messageFetchFallbackUsed: diagnostics.messageFetchFallbackUsed,
-          parsedMessagesTotal: diagnostics.parsedMessagesTotal,
-          incrementalMessagesTotal: diagnostics.incrementalMessagesTotal,
-          duplicateMessagesSkipped: diagnostics.duplicateMessagesSkipped,
-          correctedExistingMessages: diagnostics.correctedExistingMessages,
-          insertedMessages: diagnostics.insertedMessages,
-          debug: messageDebug,
-        })}`
-      );
+        byUrn.set(parsed.conversationUrn, {
+          ...local,
+          last_message_at: latest.sent_at,
+          last_external_message_id: latest.external_message_id,
+        });
+      }
 
       await supabase
         .from('message_sync_state')
         .upsert({
-          linkedin_account_id: account.id,
+          linkedin_account_id: accountIdValue,
           user_id: userId,
           last_sync_cursor: nextSyncCursor,
           last_synced_at: new Date().toISOString(),
@@ -868,7 +777,7 @@ export async function syncMessagesForUser(
       await supabase
         .from('message_sync_state')
         .upsert({
-          linkedin_account_id: account.id,
+          linkedin_account_id: accountIdValue,
           user_id: userId,
           last_synced_at: new Date().toISOString(),
           last_error: message,
