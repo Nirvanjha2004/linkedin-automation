@@ -9,9 +9,11 @@ export default function ToasterProvider() {
       toastOptions={{
         style: {
           borderRadius: '10px',
-          background: '#1f2937',
-          color: '#fff',
-          fontSize: '14px',
+          border: '1px solid rgb(228 228 231)',
+          background: '#fff',
+          color: 'rgb(9 9 11)',
+          fontSize: '13px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
         },
       }}
     />

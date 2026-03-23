@@ -3,14 +3,18 @@
 import { useState, useEffect, useCallback, use } from 'react';
 import axios from 'axios';
 import { toast } from 'sonner';
-import Header from '@/components/layout/Header';
+import { PageHeader } from '@/components/ui/page-header';
+import { StatCard } from '@/components/ui/stat-card';
+import { StatusBadge } from '@/components/ui/status-badge';
 import CampaignForm from '@/components/campaigns/CampaignForm';
 import CSVUploader from '@/components/leads/CSVUploader';
 import LeadTable from '@/components/leads/LeadTable';
 import { Campaign } from '@/types';
-import { getStatusColor } from '@/lib/utils';
-import { Play, Pause, Upload, Settings, Users, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  Play, Pause, Upload, Settings, Users, Loader2,
+  UserCheck, MessageSquare, TrendingUp, X,
+} from 'lucide-react';
 
 type Tab = 'leads' | 'settings';
 
@@ -26,11 +30,8 @@ export default function CampaignDetailPage({ params }: { params: Promise<{ id: s
     try {
       const { data } = await axios.get(`/api/campaigns/${id}`);
       setCampaign(data.campaign);
-    } catch {
-      toast.error('Campaign not found');
-    } finally {
-      setLoading(false);
-    }
+    } catch { toast.error('Campaign not found'); }
+    finally { setLoading(false); }
   }, [id]);
 
   useEffect(() => { fetchCampaign(); }, [fetchCampaign]);
@@ -43,97 +44,68 @@ export default function CampaignDetailPage({ params }: { params: Promise<{ id: s
       await axios.patch(`/api/campaigns/${id}`, { status: newStatus });
       setCampaign({ ...campaign, status: newStatus as Campaign['status'] });
       toast.success(`Campaign ${newStatus === 'active' ? 'activated' : 'paused'}`);
-    } catch {
-      toast.error('Failed to update status');
-    } finally {
-      setActionLoading(false);
-    }
+    } catch { toast.error('Failed to update status'); }
+    finally { setActionLoading(false); }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
-      </div>
-    );
-  }
-
-  if (!campaign) {
-    return (
-      <div className="p-8 text-center text-gray-500">Campaign not found</div>
-    );
-  }
+  if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="h-5 w-5 animate-spin text-indigo-600" /></div>;
+  if (!campaign) return <div className="p-8 text-center text-zinc-500">Campaign not found</div>;
 
   const stats = (campaign as Campaign & { stats?: Record<string, number> }).stats || {};
 
   return (
     <div>
-      <Header
+      <PageHeader
         title={campaign.name}
         subtitle={campaign.description}
         actions={
-          <div className="flex items-center gap-3">
-            <span className={`text-xs px-3 py-1.5 rounded-full font-medium ${getStatusColor(campaign.status)}`}>
-              {campaign.status}
-            </span>
+          <div className="flex items-center gap-2">
+            <StatusBadge status={campaign.status} />
             <button
               onClick={toggleStatus}
               disabled={actionLoading}
               className={cn(
-                'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                'inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-colors',
                 campaign.status === 'active'
-                  ? 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100'
-                  : 'bg-green-50 text-green-700 hover:bg-green-100'
+                  ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                  : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
               )}
             >
-              {actionLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : campaign.status === 'active' ? (
-                <><Pause className="h-4 w-4" /> Pause</>
-              ) : (
-                <><Play className="h-4 w-4" /> Activate</>
-              )}
+              {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" />
+                : campaign.status === 'active' ? <><Pause className="h-4 w-4" /> Pause</>
+                : <><Play className="h-4 w-4" /> Activate</>}
             </button>
           </div>
         }
       />
 
-      <div className="p-8">
-        {/* Stats Row */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4 mb-8">
+      <div className="p-8 space-y-6">
+        {/* Stats */}
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
           {[
-            { label: 'Total Leads', value: stats.total_leads || 0 },
-            { label: 'Pending', value: stats.pending || 0 },
-            { label: 'Connected', value: stats.connected || 0 },
-            { label: 'Messaged', value: stats.message_sent || 0 },
-            { label: 'Replied', value: stats.replied || 0 },
-            { label: 'Today', value: campaign.actions_today || 0 },
-          ].map((s) => (
-            <div key={s.label} className="bg-white rounded-xl border border-gray-100 p-4 text-center">
-              <p className="text-2xl font-bold text-gray-900">{s.value}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{s.label}</p>
-            </div>
+            { label: 'Total Leads', value: stats.total_leads || 0, icon: Users },
+            { label: 'Pending', value: stats.pending || 0, icon: Users, iconColor: 'text-zinc-500', iconBg: 'bg-zinc-100' },
+            { label: 'Connected', value: stats.connected || 0, icon: UserCheck, iconColor: 'text-emerald-600', iconBg: 'bg-emerald-50' },
+            { label: 'Messaged', value: stats.message_sent || 0, icon: MessageSquare, iconColor: 'text-violet-600', iconBg: 'bg-violet-50' },
+            { label: 'Replied', value: stats.replied || 0, icon: TrendingUp, iconColor: 'text-emerald-600', iconBg: 'bg-emerald-50' },
+            { label: 'Today', value: campaign.actions_today || 0, icon: Play, iconColor: 'text-indigo-600', iconBg: 'bg-indigo-50' },
+          ].map(s => (
+            <StatCard key={s.label} label={s.label} value={s.value} icon={s.icon} iconColor={s.iconColor} iconBg={s.iconBg} />
           ))}
         </div>
 
         {/* Tabs */}
-        <div className="flex items-center gap-1 mb-6 bg-gray-100 p-1 rounded-lg w-fit">
-          {[
-            { key: 'leads' as Tab, label: 'Leads', icon: Users },
-            { key: 'settings' as Tab, label: 'Settings', icon: Settings },
-          ].map((tab) => (
+        <div className="flex items-center gap-1 bg-zinc-100 p-1 rounded-lg w-fit">
+          {([['leads', 'Leads', Users], ['settings', 'Settings', Settings]] as const).map(([key, label, Icon]) => (
             <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              key={key}
+              onClick={() => setActiveTab(key)}
               className={cn(
-                'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all',
-                activeTab === tab.key
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
+                'flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all',
+                activeTab === key ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'
               )}
             >
-              <tab.icon className="h-4 w-4" />
-              {tab.label}
+              <Icon className="h-4 w-4" />{label}
             </button>
           ))}
         </div>
@@ -141,35 +113,26 @@ export default function CampaignDetailPage({ params }: { params: Promise<{ id: s
         {activeTab === 'leads' && (
           <div>
             <div className="flex items-center justify-between mb-4">
-              <p className="text-sm text-gray-500">{stats.total_leads || 0} leads in this campaign</p>
+              <p className="text-sm text-zinc-500">{stats.total_leads || 0} leads in this campaign</p>
               <button
                 onClick={() => setShowUploader(!showUploader)}
-                className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
               >
-                <Upload className="h-4 w-4" />
-                Upload CSV
+                {showUploader ? <><X className="h-4 w-4" /> Cancel</> : <><Upload className="h-4 w-4" /> Upload CSV</>}
               </button>
             </div>
-
             {showUploader && (
-              <div className="mb-6">
-                <CSVUploader
-                  campaignId={campaign.id}
-                  onSuccess={() => {
-                    setShowUploader(false);
-                    fetchCampaign();
-                  }}
-                />
+              <div className="mb-5">
+                <CSVUploader campaignId={campaign.id} onSuccess={() => { setShowUploader(false); fetchCampaign(); }} />
               </div>
             )}
-
             <LeadTable campaignId={campaign.id} />
           </div>
         )}
 
         {activeTab === 'settings' && (
           <div className="max-w-3xl">
-            <CampaignForm campaign={campaign} onSuccess={(updated) => setCampaign(updated)} />
+            <CampaignForm campaign={campaign} onSuccess={updated => setCampaign(updated)} />
           </div>
         )}
       </div>

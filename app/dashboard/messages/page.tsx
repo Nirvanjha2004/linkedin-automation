@@ -1,14 +1,11 @@
-import Header from '@/components/layout/Header';
+import { PageHeader } from '@/components/ui/page-header';
 import MessagesInbox from '@/components/messages/MessagesInbox';
 
 export default function MessagesPage() {
   return (
-    <div>
-      <Header
-        title="Messages"
-        subtitle="View and manage lead conversations by LinkedIn account"
-      />
-      <div className="p-8">
+    <div className="flex flex-col h-screen">
+      <PageHeader title="Messages" subtitle="View and manage lead conversations" />
+      <div className="flex-1 min-h-0 p-6">
         <MessagesInbox />
       </div>
     </div>

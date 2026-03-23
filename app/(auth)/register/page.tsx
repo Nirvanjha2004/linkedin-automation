@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Linkedin, Loader2, Mail, Lock, User } from 'lucide-react';
+import { Zap, Loader2, Mail, Lock, User } from 'lucide-react';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -17,123 +17,62 @@ export default function RegisterPage() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password.length < 6) {
-      toast.error('Password must be at least 6 characters');
-      return;
-    }
+    if (password.length < 6) { toast.error('Password must be at least 6 characters'); return; }
     setLoading(true);
     const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { full_name: fullName } },
+      email, password, options: { data: { full_name: fullName } },
     });
-    if (error) {
-      toast.error(error.message);
-      setLoading(false);
-    } else {
-      toast.success('Account created! Check your email to verify.');
-      router.push('/login');
-    }
+    if (error) { toast.error(error.message); setLoading(false); }
+    else { toast.success('Account created! Check your email to verify.'); router.push('/login'); }
   };
 
-  const inputStyle = {
-    width: '100%',
-    padding: '10px 12px 10px 36px',
-    border: '1.5px solid #e5e7eb',
-    borderRadius: '8px',
-    fontSize: '14px',
-    outline: 'none',
-    boxSizing: 'border-box' as const,
-  };
+  const inputCls = "w-full pl-9 pr-3 py-2.5 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent";
 
   return (
-    <div style={{
-      background: 'white',
-      borderRadius: '16px',
-      padding: '2.5rem',
-      width: '100%',
-      maxWidth: '420px',
-      boxShadow: '0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -1px rgba(0,0,0,0.04)',
-    }}>
-      <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-        <div style={{
-          background: '#eff6ff',
-          borderRadius: '12px',
-          padding: '12px',
-          width: '56px',
-          height: '56px',
-          margin: '0 auto 12px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}>
-          <Linkedin style={{ width: '28px', height: '28px', color: '#2563eb' }} />
+    <div className="bg-white rounded-xl border border-zinc-200 shadow-sm w-full max-w-[400px] p-8">
+      <div className="flex flex-col items-center mb-7">
+        <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center mb-4">
+          <Zap className="h-5 w-5 text-white" />
         </div>
-        <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#111827', marginBottom: '4px' }}>
-          Create account
-        </h1>
-        <p style={{ color: '#6b7280', fontSize: '14px' }}>Start automating your LinkedIn outreach</p>
+        <h1 className="text-xl font-semibold text-zinc-900">Create account</h1>
+        <p className="text-sm text-zinc-500 mt-1">Start automating your LinkedIn outreach</p>
       </div>
 
-      <form onSubmit={handleRegister}>
-        <div style={{ marginBottom: '1rem' }}>
-          <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: '#374151', marginBottom: '6px' }}>Full Name</label>
-          <div style={{ position: 'relative' }}>
-            <User style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', width: '16px', height: '16px', color: '#9ca3af' }} />
-            <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} required placeholder="John Doe" style={inputStyle}
-              onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
-              onBlur={(e) => e.target.style.borderColor = '#e5e7eb'} />
+      <form onSubmit={handleRegister} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-zinc-700 mb-1.5">Full Name</label>
+          <div className="relative">
+            <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 pointer-events-none" />
+            <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} required placeholder="John Doe" className={inputCls} />
           </div>
         </div>
-
-        <div style={{ marginBottom: '1rem' }}>
-          <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: '#374151', marginBottom: '6px' }}>Email</label>
-          <div style={{ position: 'relative' }}>
-            <Mail style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', width: '16px', height: '16px', color: '#9ca3af' }} />
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="you@company.com" style={inputStyle}
-              onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
-              onBlur={(e) => e.target.style.borderColor = '#e5e7eb'} />
+        <div>
+          <label className="block text-sm font-medium text-zinc-700 mb-1.5">Email</label>
+          <div className="relative">
+            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 pointer-events-none" />
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="you@company.com" className={inputCls} />
           </div>
         </div>
-
-        <div style={{ marginBottom: '1.5rem' }}>
-          <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, color: '#374151', marginBottom: '6px' }}>Password</label>
-          <div style={{ position: 'relative' }}>
-            <Lock style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', width: '16px', height: '16px', color: '#9ca3af' }} />
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢" style={inputStyle}
-              onFocus={(e) => e.target.style.borderColor = '#3b82f6'}
-              onBlur={(e) => e.target.style.borderColor = '#e5e7eb'} />
+        <div>
+          <label className="block text-sm font-medium text-zinc-700 mb-1.5">Password</label>
+          <div className="relative">
+            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 pointer-events-none" />
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" className={inputCls} />
           </div>
         </div>
-
         <button
           type="submit"
           disabled={loading}
-          style={{
-            width: '100%',
-            padding: '11px',
-            background: loading ? '#93c5fd' : '#2563eb',
-            color: 'white',
-            border: 'none',
-            borderRadius: '8px',
-            fontSize: '14px',
-            fontWeight: 600,
-            cursor: loading ? 'not-allowed' : 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px',
-          }}
+          className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-60 transition-colors mt-2"
         >
-          {loading ? (<><Loader2 style={{ width: '16px', height: '16px', animation: 'spin 1s linear infinite' }} /> Creating...</>) : 'Create Account'}
+          {loading ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating...</> : 'Create Account'}
         </button>
       </form>
 
-      <p style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '14px', color: '#6b7280' }}>
+      <p className="text-center mt-6 text-sm text-zinc-500">
         Already have an account?{' '}
-        <Link href="/login" style={{ color: '#2563eb', fontWeight: 500, textDecoration: 'none' }}>Sign in</Link>
+        <Link href="/login" className="text-indigo-600 font-medium hover:underline">Sign in</Link>
       </p>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

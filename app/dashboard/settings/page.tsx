@@ -3,8 +3,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { toast } from 'sonner';
-import Header from '@/components/layout/Header';
-import { User, Key, Bell, Shield, Save, Loader2 } from 'lucide-react';
+import { PageHeader } from '@/components/ui/page-header';
+import { SectionCard } from '@/components/ui/section-card';
+import { User, Key, Shield, Save, Loader2 } from 'lucide-react';
+
+const inputCls = 'w-full px-3 py-2.5 border border-zinc-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent';
 
 export default function SettingsPage() {
   const [user, setUser] = useState<{ email?: string; user_metadata?: { full_name?: string } } | null>(null);
@@ -22,103 +25,61 @@ export default function SettingsPage() {
 
   const saveProfile = async () => {
     setSaving(true);
-    const { error } = await supabase.auth.updateUser({
-      data: { full_name: fullName },
-    });
-    if (error) {
-      toast.error(error.message);
-    } else {
-      toast.success('Profile updated!');
-    }
+    const { error } = await supabase.auth.updateUser({ data: { full_name: fullName } });
+    if (error) toast.error(error.message);
+    else toast.success('Profile updated');
     setSaving(false);
   };
 
   return (
     <div>
-      <Header title="Settings" subtitle="Manage your account and preferences" />
+      <PageHeader title="Settings" subtitle="Manage your account and preferences" />
 
-      <div className="p-8 max-w-2xl space-y-6">
-        {/* Profile */}
-        <div className="bg-white rounded-xl border border-gray-100 p-6">
-          <h2 className="font-semibold text-gray-900 mb-5 flex items-center gap-2">
-            <User className="h-4 w-4 text-blue-600" />
-            Profile
-          </h2>
+      <div className="p-8 max-w-2xl space-y-5">
+        <SectionCard title="Profile" description="Update your display name">
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Full Name</label>
-              <input
-                type="text"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <label className="block text-sm font-medium text-zinc-700 mb-1.5">Full Name</label>
+              <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} className={inputCls} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Email</label>
-              <input
-                type="email"
-                value={user?.email || ''}
-                disabled
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm bg-gray-50 text-gray-500 cursor-not-allowed"
-              />
+              <label className="block text-sm font-medium text-zinc-700 mb-1.5">Email</label>
+              <input type="email" value={user?.email || ''} disabled className={`${inputCls} bg-zinc-50 text-zinc-400 cursor-not-allowed`} />
             </div>
             <button
               onClick={saveProfile}
               disabled={saving}
-              className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
               Save Changes
             </button>
           </div>
-        </div>
+        </SectionCard>
 
-        {/* Rate Limits Info */}
-        <div className="bg-white rounded-xl border border-gray-100 p-6">
-          <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Shield className="h-4 w-4 text-blue-600" />
-            LinkedIn Safety Limits
-          </h2>
-          <div className="space-y-3 text-sm">
-            <div className="flex justify-between py-2 border-b border-gray-50">
-              <span className="text-gray-600">Max connections per hour</span>
-              <span className="font-semibold text-gray-900">20</span>
-            </div>
-            <div className="flex justify-between py-2 border-b border-gray-50">
-              <span className="text-gray-600">Max connections per day</span>
-              <span className="font-semibold text-gray-900">200</span>
-            </div>
-            <div className="flex justify-between py-2 border-b border-gray-50">
-              <span className="text-gray-600">Min delay between actions</span>
-              <span className="font-semibold text-gray-900">30–90 seconds</span>
-            </div>
-            <div className="flex justify-between py-2">
-              <span className="text-gray-600">Connection note max length</span>
-              <span className="font-semibold text-gray-900">300 characters</span>
-            </div>
+        <SectionCard title="LinkedIn Safety Limits" description="Enforced automatically to protect your account">
+          <div className="divide-y divide-zinc-100">
+            {[
+              ['Max connections per hour', '20'],
+              ['Max connections per day', '200'],
+              ['Min delay between actions', '30–90 seconds'],
+              ['Connection note max length', '300 characters'],
+            ].map(([label, value]) => (
+              <div key={label} className="flex justify-between py-2.5">
+                <span className="text-sm text-zinc-600">{label}</span>
+                <span className="text-sm font-semibold text-zinc-900 tabular-nums">{value}</span>
+              </div>
+            ))}
           </div>
-          <p className="text-xs text-gray-400 mt-4">
-            These limits are enforced automatically to keep your LinkedIn account safe from restrictions.
-          </p>
-        </div>
+        </SectionCard>
 
-        {/* API Keys Info */}
-        <div className="bg-white rounded-xl border border-gray-100 p-6">
-          <h2 className="font-semibold text-gray-900 mb-4 flex items-center gap-2">
-            <Key className="h-4 w-4 text-blue-600" />
-            API Configuration
-          </h2>
-          <p className="text-sm text-gray-500">
-            API keys and service credentials are configured via environment variables. 
-            Contact your administrator to update Unipile, Supabase, or Redis credentials.
-          </p>
-          <div className="mt-4 bg-gray-50 rounded-lg p-4 space-y-2 text-xs font-mono text-gray-500">
+        <SectionCard title="API Configuration" description="Credentials are managed via environment variables">
+          <div className="bg-zinc-50 rounded-lg p-4 space-y-1.5 text-xs font-mono text-zinc-500">
             <p>UNIPILE_API_KEY=configured</p>
             <p>UPSTASH_REDIS=configured</p>
             <p>SUPABASE=configured</p>
           </div>
-        </div>
+        </SectionCard>
       </div>
     </div>
   );
