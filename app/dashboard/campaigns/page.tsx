@@ -14,6 +14,51 @@ import {
   Loader2, Megaphone, MoreHorizontal, ArrowUpRight,
 } from 'lucide-react';
 
+// ─── Confirm modal (inline — extracted from settings page) ────────────────────
+
+function ConfirmModal({
+  open, title, description, confirmLabel, onConfirm, onCancel,
+}: {
+  open: boolean;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-[2px]" onClick={onCancel} />
+      <div className="relative bg-white rounded-xl border border-zinc-200 shadow-xl p-6 w-full max-w-sm mx-4">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center shrink-0">
+            <Trash2 className="h-4 w-4 text-red-500" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-zinc-900">{title}</p>
+            <p className="text-sm text-zinc-500 mt-1">{description}</p>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium h-9 px-4 border border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium h-9 px-4 bg-red-600 text-white hover:bg-red-700 transition-colors"
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Row action dropdown ──────────────────────────────────────────────────────
 
 interface RowMenuProps {
@@ -178,6 +223,7 @@ export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const fetchCampaigns = useCallback(async () => {
     try {
@@ -208,7 +254,6 @@ export default function CampaignsPage() {
   };
 
   const deleteCampaign = async (id: string) => {
-    if (!confirm('Delete this campaign? All leads will be removed.')) return;
     setActionLoading(id);
     try {
       await axios.delete(`/api/campaigns/${id}`);
@@ -218,6 +263,7 @@ export default function CampaignsPage() {
       toast.error('Failed to delete campaign');
     } finally {
       setActionLoading(null);
+      setDeleteTarget(null);
     }
   };
 
@@ -350,7 +396,7 @@ export default function CampaignsPage() {
                                 campaign.status === 'active' ? 'paused' : 'active'
                               )
                             }
-                            onDelete={() => deleteCampaign(campaign.id)}
+                            onDelete={() => setDeleteTarget(campaign.id)}
                           />
                         </div>
                       </td>
@@ -371,6 +417,15 @@ export default function CampaignsPage() {
           )}
         </div>
       </div>
+
+      <ConfirmModal
+        open={deleteTarget !== null}
+        title="Delete campaign?"
+        description="All leads in this campaign will be permanently removed. This cannot be undone."
+        confirmLabel="Delete campaign"
+        onConfirm={() => deleteTarget && deleteCampaign(deleteTarget)}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

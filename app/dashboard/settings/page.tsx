@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import {
   User, CreditCard, Plug, Shield, Loader2,
-  Copy, RefreshCw, Eye, EyeOff, Check, AlertTriangle,
+  Copy, Eye, EyeOff, Check, AlertTriangle,
   ChevronRight, Zap,
 } from 'lucide-react';
 
@@ -183,6 +183,10 @@ function ProfileSection({ user }: { user: UserData | null }) {
   const [fullName, setFullName] = useState(user?.user_metadata?.full_name || '');
   const [saving, setSaving] = useState(false);
   const supabase = createClient();
+
+  useEffect(() => {
+    setFullName(user?.user_metadata?.full_name || '');
+  }, [user]);
 
   const save = async () => {
     setSaving(true);

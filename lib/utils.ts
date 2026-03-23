@@ -25,6 +25,28 @@ export function formatDateTime(dateStr: string | null | undefined): string {
   });
 }
 
+export function formatRelativeTime(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—';
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return '—';
+
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHrs = Math.floor(diffMin / 60);
+  const diffDays = Math.floor(diffHrs / 24);
+
+  if (diffSec < 60)  return 'Just now';
+  if (diffMin < 60)  return `${diffMin}m ago`;
+  if (diffHrs < 24)  return `${diffHrs}h ago`;
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7)  return `${diffDays} days ago`;
+
+  // Older than 7 days — short absolute date
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: diffDays > 365 ? 'numeric' : undefined });
+}
+
 export function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }

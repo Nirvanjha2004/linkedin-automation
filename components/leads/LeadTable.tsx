@@ -1,14 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import axios from 'axios';
 import { Lead } from '@/types';
-import { formatDateTime } from '@/lib/utils';
+import { formatRelativeTime } from '@/lib/utils';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { cn } from '@/lib/utils';
 import {
-  ExternalLink, Loader2, ChevronLeft, ChevronRight,
-  Users, MapPin, ChevronDown, Search,
+  ExternalLink, ChevronLeft, ChevronRight,
+  Users, MapPin, ChevronDown, Search, X,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -118,45 +118,109 @@ interface FilterBarProps {
   total: number;
   statusFilter: string;
   onStatusChange: (v: string) => void;
+  search: string;
+  onSearchChange: (v: string) => void;
   loading: boolean;
 }
 
-function FilterBar({ total, statusFilter, onStatusChange, loading }: FilterBarProps) {
+function FilterBar({ total, statusFilter, onStatusChange, search, onSearchChange, loading }: FilterBarProps) {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [dropdownOpen]);
+
+  const activeLabel = STATUS_OPTIONS.find(o => o.value === statusFilter)?.label ?? 'All statuses';
+
   return (
-    <div className="flex items-center justify-between gap-4 px-5 py-3.5 border-b border-zinc-100">
-      {/* Left: count */}
-      <div className="flex items-center gap-2">
-        <Search className="h-3.5 w-3.5 text-zinc-400" />
-        <span className="text-sm text-zinc-500">
+    <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-zinc-100">
+      {/* Left: search input */}
+      <div className="relative flex items-center flex-1 max-w-xs">
+        <Search className="absolute left-3 h-3.5 w-3.5 text-zinc-400 pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={e => onSearchChange(e.target.value)}
+          placeholder="Search by name or company…"
+          className={cn(
+            'h-8 w-full pl-8 pr-7 rounded-lg border border-zinc-200 text-xs text-zinc-700 bg-white',
+            'placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent',
+            'hover:border-zinc-300 transition-colors',
+          )}
+        />
+        {search && (
+          <button
+            onClick={() => onSearchChange('')}
+            className="absolute right-2 text-zinc-400 hover:text-zinc-600 transition-colors"
+            aria-label="Clear search"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+
+      {/* Right: count + status dropdown */}
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-xs text-zinc-400 tabular-nums hidden sm:block">
           {loading ? (
             <span className="inline-block h-3 w-16 bg-zinc-100 rounded animate-pulse" />
           ) : (
-            <><span className="font-medium text-zinc-700">{total.toLocaleString()}</span> lead{total !== 1 ? 's' : ''}</>
+            <><span className="font-medium text-zinc-600">{total.toLocaleString()}</span> lead{total !== 1 ? 's' : ''}</>
           )}
         </span>
-      </div>
 
-      {/* Right: status filter */}
-      <div className="relative">
-        {/* Active dot indicator */}
-        {statusFilter && (
-          <span className={cn('absolute left-3 top-1/2 -translate-y-1/2 h-2 w-2 rounded-full z-10', STATUS_DOT[statusFilter] ?? 'bg-zinc-400')} />
-        )}
-        <select
-          value={statusFilter}
-          onChange={(e) => onStatusChange(e.target.value)}
-          className={cn(
-            'h-8 appearance-none border border-zinc-200 rounded-lg text-xs text-zinc-700 bg-white',
-            'focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent',
-            'pr-7 transition-colors hover:border-zinc-300',
-            statusFilter ? 'pl-7' : 'pl-3',
+        {/* Custom status dropdown */}
+        <div ref={dropdownRef} className="relative">
+          <button
+            onClick={() => setDropdownOpen(v => !v)}
+            className={cn(
+              'h-8 flex items-center gap-2 pl-3 pr-2.5 rounded-lg border text-xs font-medium transition-colors',
+              'focus:outline-none focus:ring-2 focus:ring-indigo-500',
+              dropdownOpen
+                ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+                : 'border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300',
+            )}
+          >
+            {statusFilter && (
+              <span className={cn('h-2 w-2 rounded-full shrink-0', STATUS_DOT[statusFilter] ?? 'bg-zinc-400')} />
+            )}
+            {activeLabel}
+            <ChevronDown className={cn('h-3 w-3 text-zinc-400 transition-transform', dropdownOpen && 'rotate-180')} />
+          </button>
+
+          {dropdownOpen && (
+            <div className="absolute right-0 top-full mt-1 w-44 bg-white rounded-xl border border-zinc-200 shadow-md z-20 py-1 overflow-hidden">
+              {STATUS_OPTIONS.map(o => (
+                <button
+                  key={o.value}
+                  onClick={() => { onStatusChange(o.value); setDropdownOpen(false); }}
+                  className={cn(
+                    'w-full flex items-center gap-2.5 px-3.5 py-2 text-xs text-left transition-colors',
+                    o.value === statusFilter
+                      ? 'bg-indigo-50 text-indigo-700 font-medium'
+                      : 'text-zinc-700 hover:bg-zinc-50',
+                  )}
+                >
+                  {o.value ? (
+                    <span className={cn('h-2 w-2 rounded-full shrink-0', STATUS_DOT[o.value] ?? 'bg-zinc-400')} />
+                  ) : (
+                    <span className="h-2 w-2 rounded-full shrink-0 border border-zinc-300" />
+                  )}
+                  {o.label}
+                </button>
+              ))}
+            </div>
           )}
-        >
-          {STATUS_OPTIONS.map(o => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-3 w-3 text-zinc-400 pointer-events-none" />
+        </div>
       </div>
     </div>
   );
@@ -219,6 +283,7 @@ export default function LeadTable({ campaignId }: LeadTableProps) {
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
 
   const fetchLeads = useCallback(async () => {
     setLoading(true);
@@ -241,12 +306,25 @@ export default function LeadTable({ campaignId }: LeadTableProps) {
     setPage(1);
   };
 
+  // Client-side search filter applied on top of the server-paginated results
+  const visibleLeads = useMemo(() => {
+    if (!search.trim()) return leads;
+    const q = search.trim().toLowerCase();
+    return leads.filter(lead => {
+      const name = (lead.full_name || `${lead.first_name ?? ''} ${lead.last_name ?? ''}`).toLowerCase();
+      const company = (lead.company ?? '').toLowerCase();
+      return name.includes(q) || company.includes(q);
+    });
+  }, [leads, search]);
+
   return (
     <div className="bg-white rounded-xl border border-zinc-200 overflow-hidden">
       <FilterBar
         total={total}
         statusFilter={statusFilter}
         onStatusChange={handleStatusChange}
+        search={search}
+        onSearchChange={setSearch}
         loading={loading}
       />
 
@@ -273,7 +351,7 @@ export default function LeadTable({ campaignId }: LeadTableProps) {
           <tbody className="divide-y divide-zinc-50">
             {loading ? (
               Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} />)
-            ) : leads.length === 0 ? (
+            ) : visibleLeads.length === 0 ? (
               <tr>
                 <td colSpan={5}>
                   <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -281,16 +359,16 @@ export default function LeadTable({ campaignId }: LeadTableProps) {
                       <Users className="h-5 w-5 text-zinc-400" />
                     </div>
                     <p className="text-sm font-medium text-zinc-600 mb-1">
-                      {statusFilter ? 'No leads match this filter' : 'No leads yet'}
+                      {search ? `No results for "${search}"` : statusFilter ? 'No leads match this filter' : 'No leads yet'}
                     </p>
                     <p className="text-xs text-zinc-400">
-                      {statusFilter ? 'Try a different status filter' : 'Upload a CSV to get started'}
+                      {search ? 'Try a different name or company' : statusFilter ? 'Try a different status filter' : 'Upload a CSV to get started'}
                     </p>
                   </div>
                 </td>
               </tr>
             ) : (
-              leads.map((lead) => {
+              visibleLeads.map((lead) => {
                 const name = lead.full_name || `${lead.first_name ?? ''} ${lead.last_name ?? ''}`.trim() || '—';
                 return (
                   <tr key={lead.id} className="group hover:bg-zinc-50/80 transition-colors">
@@ -338,25 +416,28 @@ export default function LeadTable({ campaignId }: LeadTableProps) {
                       <StatusBadge status={lead.status} />
                     </td>
 
-                    {/* Last action timestamp */}
+                    {/* Last action — relative time */}
                     <td className="px-4 py-3.5">
                       {lead.last_action_at ? (
-                        <span className="text-xs text-zinc-400 tabular-nums">
-                          {formatDateTime(lead.last_action_at)}
+                        <span
+                          className="text-xs text-zinc-400 tabular-nums"
+                          title={new Date(lead.last_action_at).toLocaleString()}
+                        >
+                          {formatRelativeTime(lead.last_action_at)}
                         </span>
                       ) : (
                         <span className="text-xs text-zinc-300">—</span>
                       )}
                     </td>
 
-                    {/* LinkedIn link — visible on hover */}
+                    {/* LinkedIn link — always visible at 50%, full on hover */}
                     <td className="px-4 py-3.5">
                       <a
                         href={lead.linkedin_url}
                         target="_blank"
                         rel="noopener noreferrer"
                         title="Open LinkedIn profile"
-                        className="opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center justify-center h-7 w-7 rounded-lg text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                        className="opacity-50 hover:opacity-100 transition-opacity inline-flex items-center justify-center h-7 w-7 rounded-lg text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50"
                       >
                         <ExternalLink className="h-3.5 w-3.5" />
                       </a>

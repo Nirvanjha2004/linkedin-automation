@@ -8,10 +8,72 @@ import { StatCard } from '@/components/ui/stat-card';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { EmptyState } from '@/components/ui/empty-state';
+import { cn } from '@/lib/utils';
 import {
   Megaphone, Users, UserCheck, MessageSquare,
-  TrendingUp, ArrowRight, Plus, Clock, Loader2,
+  ArrowRight, Plus, Clock,
 } from 'lucide-react';
+
+interface DashboardData {
+  total_campaigns: number;
+  active_campaigns: number;
+  total_leads: number;
+  connections_sent: number;
+  messages_sent: number;
+  replied: number;
+  recent_campaigns: Array<{
+    id: string;
+    name: string;
+    status: string;
+    actions_today: number;
+    daily_limit: number;
+    actions_total: number;
+  }>;
+}
+
+// ─── Skeleton primitives ──────────────────────────────────────────────────────
+
+function Skeleton({ className }: { className?: string }) {
+  return <div className={cn('bg-zinc-100 rounded animate-pulse', className)} />;
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="p-8 space-y-6">
+      {/* KPI cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="bg-white rounded-xl border border-zinc-200 p-5 flex flex-col gap-3">
+            <Skeleton className="h-9 w-9 rounded-lg" />
+            <div className="space-y-2">
+              <Skeleton className="h-7 w-16" />
+              <Skeleton className="h-3.5 w-28" />
+              <Skeleton className="h-3 w-20" />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Recent campaigns card */}
+      <div className="bg-white rounded-xl border border-zinc-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-zinc-100 flex items-center justify-between">
+          <Skeleton className="h-4 w-36" />
+          <Skeleton className="h-3.5 w-14" />
+        </div>
+        <div className="divide-y divide-zinc-50">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="px-5 py-3.5 flex items-center gap-4">
+              <Skeleton className="h-3.5 flex-1 max-w-[200px]" />
+              <Skeleton className="h-5 w-16 rounded-full" />
+              <Skeleton className="h-3.5 w-12 ml-auto" />
+              <Skeleton className="h-3.5 w-10" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 interface DashboardData {
   total_campaigns: number;
@@ -68,17 +130,45 @@ export default function DashboardPage() {
 
       <div className="p-8 space-y-6">
         {loading ? (
-          <div className="flex items-center justify-center h-48">
-            <Loader2 className="h-5 w-5 animate-spin text-indigo-600" />
-          </div>
+          <DashboardSkeleton />
         ) : (
           <>
             {/* Stats */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <StatCard label="Total Campaigns" value={data?.total_campaigns ?? 0} sub={`${data?.active_campaigns ?? 0} active`} icon={Megaphone} href="/dashboard/campaigns" />
-              <StatCard label="Total Leads" value={data?.total_leads ?? 0} sub="across all campaigns" icon={Users} iconColor="text-violet-600" iconBg="bg-violet-50" href="/dashboard/leads" />
-              <StatCard label="Connections Sent" value={data?.connections_sent ?? 0} sub="LinkedIn invites" icon={UserCheck} iconColor="text-emerald-600" iconBg="bg-emerald-50" href="/dashboard/analytics" />
-              <StatCard label="Messages Sent" value={data?.messages_sent ?? 0} sub="total messages" icon={MessageSquare} iconColor="text-amber-600" iconBg="bg-amber-50" href="/dashboard/analytics" />
+              <StatCard
+                label="Total Campaigns"
+                value={data?.total_campaigns ?? 0}
+                sub={`${data?.active_campaigns ?? 0} active · Last 30 days`}
+                icon={Megaphone}
+                href="/dashboard/campaigns"
+              />
+              <StatCard
+                label="Total Leads"
+                value={data?.total_leads === 0 ? '—' : (data?.total_leads ?? '—')}
+                sub="Last 30 days"
+                icon={Users}
+                iconColor="text-violet-600"
+                iconBg="bg-violet-50"
+                href="/dashboard/leads"
+              />
+              <StatCard
+                label="Connections Sent"
+                value={data?.connections_sent === 0 ? '—' : (data?.connections_sent ?? '—')}
+                sub="Last 30 days"
+                icon={UserCheck}
+                iconColor="text-emerald-600"
+                iconBg="bg-emerald-50"
+                href="/dashboard/analytics"
+              />
+              <StatCard
+                label="Messages Sent"
+                value={data?.messages_sent === 0 ? '—' : (data?.messages_sent ?? '—')}
+                sub="Last 30 days"
+                icon={MessageSquare}
+                iconColor="text-amber-600"
+                iconBg="bg-amber-50"
+                href="/dashboard/analytics"
+              />
             </div>
 
             {/* Recent Campaigns */}
