@@ -81,23 +81,23 @@ type LLMCallResult =
   | { type: 'timeout' | 'non_retryable' | 'retryable'; message: string };
 
 async function callLLM(prompt: string): Promise<LLMCallResult> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
-    return { type: 'non_retryable', message: 'OPENAI_API_KEY is not set' };
+    return { type: 'non_retryable', message: 'GROQ_API_KEY is not set' };
   }
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'llama-3.3-70b-versatile',
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 500,
         temperature: 0.7,
