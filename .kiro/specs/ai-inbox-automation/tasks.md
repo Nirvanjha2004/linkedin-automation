@@ -31,13 +31,13 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - Add `TimeSlot`, `LeadContext`, `MessageHistoryItem`, `PromptContext` interfaces needed by lib modules
     - _Requirements: 2.1, 1.1, 3.2, 10.1_
 
-- [ ] 3. Google Calendar client (`lib/google/calendar-client.ts`)
-  - [ ] 3.1 Implement token refresh helper
+- [x] 3. Google Calendar client (`lib/google/calendar-client.ts`)
+  - [x] 3.1 Implement token refresh helper
     - Create `lib/google/calendar-client.ts`
     - Implement internal `refreshAccessToken(refreshToken: string): Promise<string>` that POSTs to `https://oauth2.googleapis.com/token` and returns a short-lived access token held in memory only
     - _Requirements: 6.1_
 
-  - [~] 3.2 Implement `getAvailableSlots`
+  - [x] 3.2 Implement `getAvailableSlots`
     - Call Google Calendar free/busy API for the next 7 days using the refreshed access token
     - Filter results to slots of exactly `durationMinutes` within 08:00–18:00 in the configured `timezone`
     - Return `TimeSlot[]` sorted by start time
@@ -48,7 +48,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 14: All returned slots respect duration and business hours** — for any `fc.record({ duration: fc.integer({ min: 15, max: 120 }), freeBusy: freeBusyArb })`, assert every returned slot has duration exactly `D` minutes and start/end within 08:00–18:00
     - **Validates: Requirements 6.2, 6.3**
 
-  - [~] 3.4 Implement `createEvent`
+  - [x] 3.4 Implement `createEvent`
     - Build event payload with title, description (lead name + LinkedIn URL), start/end from `TimeSlot`, organizer email
     - Call Google Calendar Events API with the refreshed access token
     - Return `{ eventId, htmlLink }`
@@ -58,8 +58,8 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 17: Calendar event payload contains all required fields** — for any `fc.record({ slot: slotArb, lead: leadArb })`, assert the payload has non-empty `title`, lead name in `description`, lead LinkedIn URL in `description`, `start === slot.start`, `end === slot.end`, non-empty `organizerEmail`
     - **Validates: Requirements 7.2**
 
-- [ ] 4. AI prompt builder (`lib/ai/prompt-builder.ts`)
-  - [~] 4.1 Implement `buildPrompt`
+- [~] 4. AI prompt builder (`lib/ai/prompt-builder.ts`)
+  - [-] 4.1 Implement `buildPrompt`
     - Create `lib/ai/prompt-builder.ts`
     - Accept `PromptContext` (persona, meetingObjective, lead, messageHistory, bookingStage, proposedSlots?)
     - Return a string prompt that includes all four required components: persona text, meeting objective, lead name, and most-recent message content
@@ -70,7 +70,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 9: Prompt contains all required context components** — for any `fc.record({ persona: fc.string(), objective: fc.string(), lead: leadArb, history: fc.array(msgArb, { minLength: 1 }) })`, assert the returned string contains the persona text, meeting objective, lead name, and content of the most recent message
     - **Validates: Requirements 4.4**
 
-- [ ] 5. AI slot parser (`lib/ai/slot-parser.ts`)
+- [~] 5. AI slot parser (`lib/ai/slot-parser.ts`)
   - [~] 5.1 Implement `parseSlotSelection`
     - Create `lib/ai/slot-parser.ts`
     - Accept `(leadMessage: string, proposedSlots: TimeSlot[]): SlotParseResult`
@@ -82,7 +82,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 16: Unambiguous slot selection is always parsed correctly** — for any `fc.array(slotArb, { minLength: 1, maxLength: 3 })` and a message that unambiguously references exactly one slot, assert `{ type: 'selected' }` is returned; for zero or multiple references, assert `{ type: 'ambiguous' }` or `{ type: 'none' }`
     - **Validates: Requirements 7.1, 7.6**
 
-- [ ] 6. AI conversation handler (`lib/ai/conversation-handler.ts`)
+- [~] 6. AI conversation handler (`lib/ai/conversation-handler.ts`)
   - [~] 6.1 Implement `processAIReplyJob` — context fetching and guards
     - Create `lib/ai/conversation-handler.ts`
     - Implement `processAIReplyJob(supabase, input: AIHandlerInput): Promise<AIHandlerResult>`
@@ -139,7 +139,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
 - [~] 7. Checkpoint — core library complete
   - Ensure all non-optional tests pass. Verify `lib/google/calendar-client.ts`, `lib/ai/prompt-builder.ts`, `lib/ai/slot-parser.ts`, and `lib/ai/conversation-handler.ts` compile without errors. Ask the user if questions arise.
 
-- [ ] 8. Extend sync pipeline to enqueue AI reply jobs
+- [~] 8. Extend sync pipeline to enqueue AI reply jobs
   - [~] 8.1 Add AI job enqueue logic to `syncMessagesForUser`
     - In `lib/linkedin/message-sync.ts`, after inserting new inbound messages, check if the conversation has `ai_enabled = true` and `ai_status = 'active'`
     - If so, upsert a single `ai_reply_jobs` record with `status = 'pending'` using the partial unique index to enforce deduplication (one pending job per conversation)
@@ -156,14 +156,14 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 8: Message history is always sorted ascending by sent_at** — for any `fc.array(fc.record({ sent_at: fc.date() }), { minLength: 1 })` inserted in arbitrary order, assert the array returned by the handler's fetch is strictly ascending by `sent_at`
     - **Validates: Requirements 4.1**
 
-- [ ] 9. Extend worker to process AI reply jobs
+- [~] 9. Extend worker to process AI reply jobs
   - [~] 9.1 Add AI reply job polling to `app/api/worker/route.ts`
     - After the existing `action_queue` processing block, add a second block that queries `ai_reply_jobs` where `status = 'pending'` and `execute_at <= now`, ordered by `execute_at ASC`, limit 10
     - For each job: atomically claim it (`UPDATE ... SET status = 'processing' WHERE status = 'pending'`), acquire a Redis lock (`ai_reply_job:{jobId}`, TTL 5 min) via `lib/redis/lock-manager.ts`, call `processAIReplyJob`, release lock
     - Add a cleanup pass at worker startup: reset jobs stuck in `processing` for > 10 minutes back to `pending`
     - _Requirements: 3.1, 10.4_
 
-- [ ] 10. API routes — AI automation config and Google OAuth
+- [~] 10. API routes — AI automation config and Google OAuth
   - [~] 10.1 Implement `GET /api/ai-automation/config`
     - Create `app/api/ai-automation/config/route.ts`
     - Require authenticated session; fetch `ai_automation_config` for the user (return defaults if not found)
@@ -185,7 +185,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - Create `app/api/ai-automation/google/callback/route.ts` — exchange authorization code for tokens, store `refresh_token` in `ai_automation_config`, redirect to settings page
     - _Requirements: 1.3, 6.1_
 
-- [ ] 11. API routes — conversation AI controls
+- [~] 11. API routes — conversation AI controls
   - [~] 11.1 Implement `PATCH /api/ai-automation/conversations/[id]/toggle`
     - Create `app/api/ai-automation/conversations/[id]/toggle/route.ts`
     - Require authenticated session and paid billing entitlement (return 402 for free plan)
@@ -217,7 +217,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - In `app/api/messages/send/route.ts`, after sending the message, if the conversation has `ai_status = 'active'`, atomically set `ai_status = 'paused'` and cancel pending AI jobs before returning
     - _Requirements: 8.1_
 
-- [ ] 12. Billing webhook — pause AI on subscription downgrade
+- [~] 12. Billing webhook — pause AI on subscription downgrade
   - [~] 12.1 Extend billing webhook to pause active AI conversations
     - In `app/api/billing/webhook/route.ts`, when a subscription transitions to `inactive` or `canceled`, query all conversations for that user where `ai_status = 'active'` and bulk-update them to `ai_status = 'paused'`
     - _Requirements: 9.3_
@@ -225,7 +225,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
 - [~] 13. Checkpoint — backend complete
   - Ensure all non-optional tests pass. Verify all API routes return correct status codes for auth, billing, and validation errors. Ask the user if questions arise.
 
-- [ ] 14. MessagesInbox UI updates (`components/messages/MessagesInbox.tsx`)
+- [~] 14. MessagesInbox UI updates (`components/messages/MessagesInbox.tsx`)
   - [~] 14.1 Extend conversation data types and fetch AI status
     - Add `ai_enabled`, `ai_status` to the `ConversationSummary` and `ConversationDetails` local interfaces
     - Ensure the conversations API response includes these fields
@@ -255,7 +255,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 4: AI message indicator is always present for AI-sourced messages** — for any message record where `metadata.source === 'ai_agent'`, assert the rendered `MessageBubble` contains an AI indicator element; for any other source value, assert no indicator is rendered
     - **Validates: Requirements 2.5, 4.7**
 
-- [ ] 15. Settings page UI for AI automation config (`app/dashboard/settings/page.tsx`)
+- [~] 15. Settings page UI for AI automation config (`app/dashboard/settings/page.tsx`)
   - [~] 15.1 Add AI Automation section to settings page
     - Fetch `GET /api/ai-automation/config` on mount
     - Render form fields: persona (textarea), meeting objective (textarea), meeting duration (number input, 15–120), timezone (select), default AI enabled (toggle)
