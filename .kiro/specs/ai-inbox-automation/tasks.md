@@ -58,8 +58,8 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 17: Calendar event payload contains all required fields** — for any `fc.record({ slot: slotArb, lead: leadArb })`, assert the payload has non-empty `title`, lead name in `description`, lead LinkedIn URL in `description`, `start === slot.start`, `end === slot.end`, non-empty `organizerEmail`
     - **Validates: Requirements 7.2**
 
-- [~] 4. AI prompt builder (`lib/ai/prompt-builder.ts`)
-  - [-] 4.1 Implement `buildPrompt`
+- [x] 4. AI prompt builder (`lib/ai/prompt-builder.ts`)
+  - [x] 4.1 Implement `buildPrompt`
     - Create `lib/ai/prompt-builder.ts`
     - Accept `PromptContext` (persona, meetingObjective, lead, messageHistory, bookingStage, proposedSlots?)
     - Return a string prompt that includes all four required components: persona text, meeting objective, lead name, and most-recent message content
@@ -70,8 +70,8 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 9: Prompt contains all required context components** — for any `fc.record({ persona: fc.string(), objective: fc.string(), lead: leadArb, history: fc.array(msgArb, { minLength: 1 }) })`, assert the returned string contains the persona text, meeting objective, lead name, and content of the most recent message
     - **Validates: Requirements 4.4**
 
-- [~] 5. AI slot parser (`lib/ai/slot-parser.ts`)
-  - [~] 5.1 Implement `parseSlotSelection`
+- [ ] 5. AI slot parser (`lib/ai/slot-parser.ts`)
+  - [x] 5.1 Implement `parseSlotSelection`
     - Create `lib/ai/slot-parser.ts`
     - Accept `(leadMessage: string, proposedSlots: TimeSlot[]): SlotParseResult`
     - Match by ordinal ("first", "second", "third", "1", "2", "3"), time string, or date string against each slot's `label`
