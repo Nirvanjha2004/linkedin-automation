@@ -24,14 +24,22 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
     }
 
-    // Verify ownership via campaign join
+    // Verify ownership: fetch campaign IDs belonging to this user
+    const { data: campaigns } = await supabase
+      .from('campaigns')
+      .select('id')
+      .eq('user_id', user.id);
+
+    const campaignIds = (campaigns ?? []).map((c: { id: string }) => c.id);
+    if (!campaignIds.length) {
+      return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
+    }
+
     const { data: lead, error } = await supabase
       .from('leads')
       .update(update)
       .eq('id', id)
-      .in('campaign_id',
-        supabase.from('campaigns').select('id').eq('user_id', user.id)
-      )
+      .in('campaign_id', campaignIds)
       .select('id, notes, tags')
       .single();
 
