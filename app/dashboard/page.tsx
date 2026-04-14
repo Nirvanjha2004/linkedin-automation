@@ -98,16 +98,15 @@ export default function DashboardPage() {
 
   const fetchDashboard = useCallback(async () => {
     try {
-      const { data: campaignsData } = await axios.get('/api/campaigns');
-      const campaigns = campaignsData.campaigns || [];
+      const { data } = await axios.get('/api/dashboard');
       setData({
-        total_campaigns: campaigns.length,
-        active_campaigns: campaigns.filter((c: { status: string }) => c.status === 'active').length,
-        total_leads: 0,
-        connections_sent: 0,
-        messages_sent: 0,
-        replied: 0,
-        recent_campaigns: campaigns.slice(0, 5),
+        total_campaigns:   data.stats.total_campaigns,
+        active_campaigns:  data.stats.active_campaigns,
+        total_leads:       data.stats.total_leads,
+        connections_sent:  data.stats.connections_sent,
+        messages_sent:     data.stats.messages_sent,
+        replied:           data.stats.replied,
+        recent_campaigns:  data.recent_campaigns || [],
       });
     } catch { /* ignore */ }
     finally { setLoading(false); }

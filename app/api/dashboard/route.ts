@@ -1,42 +1,57 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
-// GET /api/dashboard - Dashboard stats
+// GET /api/dashboard
 export async function GET() {
   try {
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
-    
+
     if (authError || !user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    const [campaignsRes, logsRes] = await Promise.all([
-      supabase.from('campaigns')
-        .select('id, status, actions_today, actions_total')
-        .eq('user_id', user.id),
-      supabase.from('action_logs')
-        .select('action_type, status, executed_at, campaigns!inner(user_id)')
-        .eq('campaigns.user_id', user.id)
-        .gte('executed_at', `${today}T00:00:00Z`)
-        .eq('status', 'completed'),
+    const [campaignsRes, leadsRes] = await Promise.all([
+      supabase
+        .from('campaigns')
+        .select('id, name, status, actions_today, actions_total, daily_limit, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false }),
+
+      supabase
+        .from('leads')
+        .select('status, connection_sent_at, message_sent_at, campaigns!inner(user_id)')
+        .eq('campaigns.user_id', user.id),
     ]);
 
-    const campaigns = campaignsRes.data || [];
-    const todayLogs = logsRes.data || [];
+    const campaigns = campaignsRes.data ?? [];
+    const leads = leadsRes.data ?? [];
 
-    const stats = {
-      total_campaigns: campaigns.length,
-      active_campaigns: campaigns.filter(c => c.status === 'active').length,
-      connections_sent_today: todayLogs.filter(l => l.action_type === 'connect').length,
-      messages_sent_today: todayLogs.filter(l => l.action_type === 'message').length,
-      followups_sent_today: todayLogs.filter(l => l.action_type === 'follow_up').length,
-      total_actions_today: todayLogs.length,
-    };
+    // Count leads whose connection/message was sent in the last 30 days
+    const connections_sent = leads.filter(
+      (l) => l.connection_sent_at && l.connection_sent_at >= thirtyDaysAgo
+    ).length;
 
-    return NextResponse.json({ stats });
+    const messages_sent = leads.filter(
+      (l) =>
+        l.message_sent_at && l.message_sent_at >= thirtyDaysAgo
+    ).length;
+
+    const replied = leads.filter((l) => l.status === 'replied').length;
+
+    return NextResponse.json({
+      stats: {
+        total_campaigns: campaigns.length,
+        active_campaigns: campaigns.filter((c) => c.status === 'active').length,
+        total_leads: leads.length,
+        connections_sent,
+        messages_sent,
+        replied,
+      },
+      recent_campaigns: campaigns.slice(0, 5),
+    });
   } catch (err: unknown) {
     const error = err as Error;
     return NextResponse.json({ error: error.message }, { status: 500 });

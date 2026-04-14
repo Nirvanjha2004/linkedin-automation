@@ -268,15 +268,37 @@ export default function AnalyticsPage() {
   const fetchData = useCallback(async () => {
     try {
       const { data } = await axios.get('/api/campaigns');
-      const cams = data.campaigns || [];
-      const withStats = await Promise.all(
-        cams.map(async (c: CampaignStat) => {
-          try {
-            const { data: detail } = await axios.get(`/api/campaigns/${c.id}`);
-            return { ...c, stats: detail.campaign.stats };
-          } catch { return c; }
-        })
-      );
+      const cams: CampaignStat[] = data.campaigns || [];
+
+      // Fetch all leads in one shot instead of N+1 per-campaign requests
+      const { data: leadsData } = await axios.get('/api/leads?limit=10000');
+      const allLeads: Array<{ campaign_id: string; status: string }> = leadsData.leads || [];
+
+      // Group lead counts by campaign_id
+      const leadsByCampaign = new Map<string, Record<string, number>>();
+      for (const lead of allLeads) {
+        if (!leadsByCampaign.has(lead.campaign_id)) {
+          leadsByCampaign.set(lead.campaign_id, {
+            total_leads: 0, connected: 0, message_sent: 0, replied: 0, failed: 0,
+          });
+        }
+        const s = leadsByCampaign.get(lead.campaign_id)!;
+        s.total_leads++;
+        if (lead.status === 'connected')                                          s.connected++;
+        // message_sent covers all statuses that come after the initial message
+        if (['message_sent', 'followup_1_sent', 'followup_2_sent',
+             'replied', 'completed'].includes(lead.status))                       s.message_sent++;
+        if (lead.status === 'replied')                                            s.replied++;
+        if (lead.status === 'failed')                                             s.failed++;
+      }
+
+      const withStats = cams.map((c) => ({
+        ...c,
+        stats: leadsByCampaign.get(c.id) ?? {
+          total_leads: 0, connected: 0, message_sent: 0, replied: 0, failed: 0,
+        },
+      }));
+
       setCampaigns(withStats);
     } catch { /* ignore */ }
     finally { setLoading(false); }
