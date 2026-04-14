@@ -78,33 +78,33 @@ function buildHeaders(
   extra: Record<string, string> = {}
 ): Record<string, string> {
   return {
-    accept: 'application/vnd.linkedin.normalized+json+2.1', // The fetch function will override this with application/graphql when needed
-    'accept-language': 'en-US,en;q=0.9', // Updated from q=0.8
+    accept: 'application/vnd.linkedin.normalized+json+2.1',
+    'accept-language': 'en-US,en;q=0.9',
     'cache-control': 'no-cache',
     'csrf-token': jsessionid,
     pragma: 'no-cache',
-    priority: 'u=1, i', // Added from cURL
-    'sec-ch-prefers-color-scheme': 'dark', // Added from cURL
-    'sec-ch-ua': '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"', // Added from cURL
-    'sec-ch-ua-mobile': '?0', // Added from cURL
-    'sec-ch-ua-platform': '"Windows"', // Added from cURL
-    'sec-fetch-dest': 'empty', // Added from cURL
+    priority: 'u=1, i',
+    'sec-ch-prefers-color-scheme': 'dark',
+    'sec-ch-ua': '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'empty',
     'sec-fetch-mode': 'cors',
     'sec-fetch-site': 'same-origin',
     'user-agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36', // Updated to Chrome 146
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
     'x-li-lang': 'en_US',
     'x-li-track': JSON.stringify({
-      clientVersion: '1.13.42962', // Updated to match cURL build
-      mpVersion: '1.13.42962',     // Updated to match cURL build
+      clientVersion: '1.13.42962',
+      mpVersion: '1.13.42962',
       osName: 'web',
-      timezoneOffset: 5.5,         // Updated to match cURL
-      timezone: 'Asia/Calcutta',   // Updated to match cURL
+      timezoneOffset: 5.5,
+      timezone: 'Asia/Calcutta',
       deviceFormFactor: 'DESKTOP',
       mpName: 'voyager-web',
-      displayDensity: 1.25,        // Updated to match cURL
+      displayDensity: 1.25,
       displayWidth: 1920,
-      displayHeight: 1200,         // Updated to match cURL
+      displayHeight: 1200,
     }),
     'x-restli-protocol-version': '2.0.0',
     ...extra,
@@ -113,7 +113,6 @@ function buildHeaders(
 
 /** Cookie string for all authenticated requests */
 function buildCookie(liAt: string, jsessionid: string): string {
-  // Cookie requires quoted JSESSIONID; csrf-token header uses the bare value
   return `li_at=${liAt}; JSESSIONID="${jsessionid}"`;
 }
 
@@ -125,7 +124,6 @@ function findStringByPrefix(value: unknown, prefix: string): string | null {
   if (typeof value === 'string') {
     return value.startsWith(prefix) ? value : null;
   }
-
   if (Array.isArray(value)) {
     for (const item of value) {
       const found = findStringByPrefix(item, prefix);
@@ -133,14 +131,12 @@ function findStringByPrefix(value: unknown, prefix: string): string | null {
     }
     return null;
   }
-
   if (typeof value === 'object' && value !== null) {
     for (const entry of Object.values(value)) {
       const found = findStringByPrefix(entry, prefix);
       if (found) return found;
     }
   }
-
   return null;
 }
 
@@ -154,7 +150,6 @@ function parseLinkedInError(status: number, body: unknown): ParsedError {
   const bodyStr =
     typeof body === 'string' ? body : JSON.stringify(body ?? '');
 
-  // Cloudflare / proxy HTML error
   if (
     bodyStr.trimStart().startsWith('<!DOCTYPE') ||
     bodyStr.trimStart().toLowerCase().startsWith('<html')
@@ -219,6 +214,7 @@ function extractLeadProfile(profileEntity: any, included: any[] = []): LeadProfi
   // Profile picture — use the largest artifact
   let profilePicUrl: string | null = null;
   const vectorImage =
+    profileEntity?.profilePicture?.displayImageReferenceResolutionResult?.vectorImage ??
     profileEntity?.profilePicture?.displayImageReference?.vectorImage;
   if (vectorImage?.rootUrl && vectorImage?.artifacts?.length > 0) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -232,45 +228,100 @@ function extractLeadProfile(profileEntity: any, included: any[] = []): LeadProfi
   const vanityName: string | null = profileEntity?.publicIdentifier ?? null;
   const profileUrn: string | null = profileEntity?.entityUrn ?? null;
 
-  // Current position — LinkedIn returns positions as separate entities in `included`
-  // The profileTopPosition on the profile entity points to the top position URN.
+  // ── Current Position Resolution ──────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let currentPosition: any = null;
 
-  // Try to find the top position URN from the profile entity
+  // Strategy 1: profileTopPosition['*elements'] URN list
   const topPositionUrns: string[] =
-    profileEntity?.profileTopPosition?.['*elements'] ?? [];
+    profileEntity?.profileTopPosition?.['*elements'] ??
+    profileEntity?.['*profileTopPosition'] ??
+    [];
 
   if (topPositionUrns.length > 0 && included.length > 0) {
     currentPosition = included.find(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (e: any) => e.entityUrn === topPositionUrns[0]
+      (e: any) => topPositionUrns.includes(e.entityUrn)
     ) ?? null;
   }
 
-  // Fallback: scan included for any fsd_profilePosition belonging to this profile
-  // that has no end date (i.e. current role)
+  // Strategy 2: scan included for Position entities belonging to this profile
   if (!currentPosition && profileUrn && included.length > 0) {
     const profileId = profileUrn.split(':').pop();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const positions = included.filter((e: any) =>
-      typeof e.entityUrn === 'string' &&
-      e.entityUrn.startsWith(`urn:li:fsd_profilePosition:(${profileId}`) ||
-      (typeof e.entityUrn === 'string' &&
-        e.entityUrn.includes('fsd_profilePosition') &&
-        e.entityUrn.includes(profileId ?? ''))
-    );
+    const positions = included.filter((e: any) => {
+      if (typeof e.entityUrn !== 'string') return false;
+      return (
+        e.entityUrn.startsWith(`urn:li:fsd_profilePosition:(${profileId}`) ||
+        (e.entityUrn.includes('fsd_profilePosition') && e.entityUrn.includes(profileId ?? ''))
+      );
+    });
     currentPosition =
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      positions.find((p: any) => !p.dateRange?.end) ?? positions[0] ?? null;
+      positions.find((p: any) => !p.timePeriod?.end && !p.dateRange?.end) ??
+      positions[0] ??
+      null;
   }
 
-  // Location: prefer geo name, fall back to countryCode
-  const location: string | null =
-    profileEntity?.geoLocation?.geo?.defaultLocalizedName ??
-    profileEntity?.location?.defaultLocalizedName ??
-    profileEntity?.location?.countryCode?.toUpperCase() ??
-    null;
+  // Strategy 3: experienceCard reference in included
+  if (!currentPosition && included.length > 0) {
+    const experienceCardUrn: string | null =
+      profileEntity?.['*experienceCard'] ?? null;
+    if (experienceCardUrn) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const card = included.find((e: any) => e.entityUrn === experienceCardUrn);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const topComponent = card?.topComponents?.[0] ?? card?.components?.[0] ?? null;
+      currentPosition = topComponent?.components?.entityComponent ?? topComponent ?? null;
+    }
+  }
+
+  // ── Location Resolution ───────────────────────────────────────────────────
+  // Try to resolve from included geo entity first, then inline fallbacks.
+  // NOTE: if geo is not in included, resolveGeoLocation() will fetch it separately.
+  let location: string | null = null;
+  const geoUrn: string | null = profileEntity?.geoLocation?.['*geo'] ?? null;
+  if (geoUrn && included.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const geoEntity = included.find((e: any) => e.entityUrn === geoUrn || e['$id'] === geoUrn);
+    location = geoEntity?.defaultLocalizedName ?? geoEntity?.name ?? null;
+  }
+  if (!location) {
+    location =
+      profileEntity?.geoLocation?.geo?.defaultLocalizedName ??
+      profileEntity?.location?.defaultLocalizedName ??
+      profileEntity?.location?.countryCode?.toUpperCase() ??
+      null;
+  }
+
+  // ── Company + Title Resolution ────────────────────────────────────────────
+  // Primary: from resolved position entity
+  let company: string | null =
+    currentPosition?.companyName ?? currentPosition?.company?.name ?? null;
+  let title: string | null = currentPosition?.title ?? null;
+
+  // Fallback: parse from headline string when position entities are absent.
+  // Covers patterns like:
+  //   "Cofounder, Wavelength"       → title="Cofounder",        company="Wavelength"
+  //   "Software Engineer at Google" → title="Software Engineer", company="Google"
+  //   "CEO | Acme Corp"             → title="CEO",               company="Acme Corp"
+  if ((!company || !title) && profileEntity?.headline) {
+    const headline: string = profileEntity.headline.trim();
+    const atMatch    = headline.match(/^(.+?)\s+at\s+(.+)$/i);
+    const pipeMatch  = headline.match(/^(.+?)\s*[|]\s*(.+)$/);
+    const commaMatch = headline.match(/^(.+?),\s*(.+)$/);
+
+    if (atMatch) {
+      title   = title   ?? atMatch[1].trim();
+      company = company ?? atMatch[2].trim();
+    } else if (pipeMatch) {
+      title   = title   ?? pipeMatch[1].trim();
+      company = company ?? pipeMatch[2].trim();
+    } else if (commaMatch) {
+      title   = title   ?? commaMatch[1].trim();
+      company = company ?? commaMatch[2].trim();
+    }
+  }
 
   return {
     provider_id: profileUrn ?? null,
@@ -283,20 +334,13 @@ function extractLeadProfile(profileEntity: any, included: any[] = []): LeadProfi
     public_profile_url: vanityName
       ? `https://www.linkedin.com/in/${vanityName}/`
       : null,
-    company: currentPosition?.companyName ?? null,
-    title: currentPosition?.title ?? null,
+    company,
+    title,
   };
 }
 
 // ─── Session Bootstrap ────────────────────────────────────────────────────────
 
-/**
- * Obtains a fresh JSESSIONID by making an authenticated GET to /voyager/api/me.
- * LinkedIn sets JSESSIONID in the Set-Cookie response header on the first
- * authenticated request. Only the li_at cookie is needed as input.
- *
- * Call this once during account setup, and again if a request returns 401/403.
- */
 export async function bootstrapSession(liAt: string): Promise<string> {
   const response = await fetch('https://www.linkedin.com/', {
     headers: {
@@ -307,51 +351,34 @@ export async function bootstrapSession(liAt: string): Promise<string> {
       'Connection': 'keep-alive',
       'Upgrade-Insecure-Requests': '1',
     },
-    redirect: 'follow' // LinkedIn often redirects from / to /feed/ when authenticated
+    redirect: 'follow',
   });
 
   if (!response.ok) {
     throw new Error(`LinkedIn returned HTTP ${response.status}. The li_at token may be invalid or expired.`);
   }
 
-  // Use getSetCookie() if available (Node 18+), otherwise fallback to standard get()
   const setCookies: string[] =
     typeof (response.headers as any).getSetCookie === 'function'
       ? (response.headers as any).getSetCookie()
       : [response.headers.get('set-cookie') ?? ''];
 
   for (const cookie of setCookies) {
-    /**
-     * Updated Regex:
-     * 1. Matches "JSESSIONID="
-     * 2. Handles optional starting double quote
-     * 3. Captures the "ajax:..." string
-     * 4. Stops at a closing quote, semicolon, or space
-     */
     const match = cookie.match(/JSESSIONID=["']?(ajax:[^"';\s]+)["']?/);
-
-    if (match?.[1]) {
-      // Return the raw ajax: string to be used as the 'csrf-token' header
-      return match[1];
-    }
+    if (match?.[1]) return match[1];
   }
 
   throw new Error('JSESSIONID not found in LinkedIn response. Check if li_at is still valid.');
 }
 
-/**
- * Fetches the logged-in user's own profile to get their fsd_profile URN.
- * Used during account setup — the URN is stored as mailboxUrn for messaging.
- */
 export async function getOwnProfile(
   liAt: string,
   jsessionid: string
 ): Promise<{ profileUrn: string; vanityName: string; firstName: string; lastName: string }> {
-
   const meRes = await fetch(`${VOYAGER}/me`, {
     headers: {
-      ...buildHeaders(jsessionid), // Must include 'csrf-token': jsessionid
-      'Cookie': `li_at=${liAt}; JSESSIONID="${jsessionid}"`, //
+      ...buildHeaders(jsessionid),
+      'Cookie': `li_at=${liAt}; JSESSIONID="${jsessionid}"`,
       'Accept': 'application/vnd.linkedin.normalized+json+2.1',
     },
   });
@@ -359,11 +386,6 @@ export async function getOwnProfile(
   if (!meRes.ok) throw new Error(`GET /me failed: HTTP ${meRes.status}`);
 
   const meData = await meRes.json();
-
-  /**
-   * Data Extraction based on your metadata:
-   * The 'included' array contains the MiniProfile object with the names and URNs.
-   */
   const included = meData?.included || [];
   const miniProfile = included.find(
     (item: any) => item['$type'] === 'com.linkedin.voyager.identity.shared.MiniProfile'
@@ -373,9 +395,8 @@ export async function getOwnProfile(
     throw new Error('Could not find MiniProfile in the LinkedIn response included array.');
   }
 
-  // dashEntityUrn is the fsd_profile URN needed for Step 3 of your flow
   const profileUrn = miniProfile.dashEntityUrn;
-  const vanityName = miniProfile.publicIdentifier; // e.g., 'rittik-singh-0480a539a'
+  const vanityName = miniProfile.publicIdentifier;
   const firstName = miniProfile.firstName || '';
   const lastName = miniProfile.lastName || '';
 
@@ -383,27 +404,16 @@ export async function getOwnProfile(
     throw new Error('Required profile identifiers (URN or Vanity Name) are missing from the response.');
   }
 
-  // These values are now ready to be saved to your 'linkedin_accounts' table
-  return {
-    profileUrn,
-    vanityName,
-    firstName,
-    lastName
-  };
+  return { profileUrn, vanityName, firstName, lastName };
 }
 
 // ─── LinkedIn Client ──────────────────────────────────────────────────────────
 
-/**
- * Callback invoked when JSESSIONID is refreshed mid-request.
- * Use this to persist the new value to the database.
- */
 type OnSessionRefresh = (newJsessionid: string) => Promise<void>;
 
 export class LinkedInClient {
   private liAt: string;
   private jsessionid: string;
-  /** The account owner's own fsd_profile URN — used as mailboxUrn in messages */
   private profileUrn: string;
   private onSessionRefresh: OnSessionRefresh | null;
 
@@ -440,10 +450,6 @@ export class LinkedInClient {
     return parseLinkedInError(response.status, bodyText);
   }
 
-  /**
-   * Refreshes JSESSIONID from li_at when a 401/403 is received.
-   * Persists the new value via the onSessionRefresh callback.
-   */
   private async tryRefreshSession(): Promise<boolean> {
     try {
       this.jsessionid = await bootstrapSession(this.liAt);
@@ -455,11 +461,111 @@ export class LinkedInClient {
     }
   }
 
+  // ── resolveGeoLocation ──────────────────────────────────────────────────────
+
+  /**
+   * Resolves a geo URN (urn:li:fsd_geo:XXXXXXX) to a human-readable location string.
+   * Called when the geo entity is not present in the profile's included array.
+   *
+   * Endpoint: GET /voyager/api/typeahead/dash/geo?q=node&ids=List(urn:li:fsd_geo:XXXXX)
+   * Returns: { elements: [{ id, name, ... }] }
+   */
+  private async resolveGeoLocation(geoUrn: string): Promise<string | null> {
+    try {
+      const encodedUrn = encodeURIComponent(geoUrn);
+      const url = `${VOYAGER}/typeahead/dash/geo?q=node&ids=List(${encodedUrn})`;
+
+      const res = await this.fetchWithSessionRefresh(() =>
+        fetch(url, { headers: this.headers() })
+      );
+
+      if (!res.ok) return null;
+
+      const data = await res.json();
+
+      // Response shape: { elements: [{ entityUrn, defaultLocalizedName, ... }] }
+      // Also check included array as LinkedIn sometimes returns it there
+      const elements: any[] = data?.elements ?? data?.included ?? [];
+      const geo = elements.find(
+        (e: any) => e.entityUrn === geoUrn || e['$id'] === geoUrn
+      ) ?? elements[0];
+
+      return geo?.defaultLocalizedName ?? geo?.name ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  // ── resolveExperienceCard ───────────────────────────────────────────────────
+
+  /**
+   * Resolves the *experienceCard URN pointer to get the current company + title.
+   * Called when position entities are absent from the profile's included array.
+   *
+   * Endpoint: GET /voyager/api/identity/dash/profileCards
+   *   ?q=profileCard
+   *   &profileCardUrn=<experienceCardUrn>
+   *   &decorationId=com.linkedin.voyager.dash.deco.web.profilecard.WebExperienceSummaryProfileCard-14
+   *
+   * The response includes fsd_profilePosition entities in the included array,
+   * each with: title, companyName, timePeriod (no end = current role).
+   */
+  private async resolveExperienceCard(
+    experienceCardUrn: string
+  ): Promise<{ company: string | null; title: string | null }> {
+    try {
+      const encodedUrn = encodeURIComponent(experienceCardUrn);
+      const decorationId =
+        'com.linkedin.voyager.dash.deco.web.profilecard.WebExperienceSummaryProfileCard-14';
+      const url =
+        `${VOYAGER}/identity/dash/profileCards` +
+        `?q=profileCard` +
+        `&profileCardUrn=${encodedUrn}` +
+        `&decorationId=${decorationId}`;
+
+      const res = await this.fetchWithSessionRefresh(() =>
+        fetch(url, { headers: this.headers() })
+      );
+
+      if (!res.ok) return { company: null, title: null };
+
+      const data = await res.json();
+      const included: any[] = data?.included ?? data?.elements ?? [];
+
+      // Find position entities — prefer one with no end date (currently active)
+      const positions = included.filter(
+        (e: any) =>
+          typeof e?.entityUrn === 'string' &&
+          e.entityUrn.includes('fsd_profilePosition')
+      );
+
+      const current =
+        positions.find((p: any) => !p.timePeriod?.end && !p.dateRange?.end) ??
+        positions[0] ??
+        null;
+
+      if (!current) return { company: null, title: null };
+
+      return {
+        company: current.companyName ?? current.company?.name ?? null,
+        title: current.title ?? null,
+      };
+    } catch {
+      return { company: null, title: null };
+    }
+  }
+
   // ── getProfile ──────────────────────────────────────────────────────────────
 
   /**
    * Fetches a LinkedIn profile by URL or bare vanity name.
-   * Returns the raw profile entity + extracted LeadProfileData.
+   *
+   * After the primary GraphQL fetch, two pointer-resolution calls are made
+   * in parallel when needed:
+   *   1. *experienceCard  → resolves current company + title
+   *   2. *geo URN         → resolves human-readable location string
+   *
+   * Both secondary calls are best-effort — a failure won't block the return.
    */
   async getProfile(linkedinUrl: string): Promise<LinkedInResponse> {
     const vanityName = extractLinkedInIdentifier(linkedinUrl);
@@ -481,25 +587,21 @@ export class LinkedInClient {
 
     const entity =
       included.find(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (e: any) =>
           isProfileEntity(e) &&
           typeof e?.publicIdentifier === 'string' &&
           e.publicIdentifier.toLowerCase() === normalizedVanity
       ) ??
       included.find(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (e: any) =>
           isProfileEntity(e) &&
           typeof e?.publicIdentifier === 'string' &&
           e.publicIdentifier.toLowerCase().includes(normalizedVanity)
       ) ??
       included.find(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (e: any) => isProfileEntity(e) && e.entityUrn !== this.profileUrn
       ) ??
       included.find(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (e: any) => isProfileEntity(e)
       );
 
@@ -507,28 +609,61 @@ export class LinkedInClient {
       return { success: false, error: 'unknown_error', message: 'Profile not found in response' };
     }
 
+    // ── Extract base profile data (may have null company/location) ────────────
+    let profileData = extractLeadProfile(entity, included);
+
+    // ── Parallel pointer resolution for missing fields ────────────────────────
+    // Only fire secondary calls for the fields that are still null after
+    // extractLeadProfile() — avoids unnecessary requests.
+    const needsCompany  = !profileData.company || !profileData.title;
+    const needsLocation = !profileData.location;
+
+    const experienceCardUrn: string | null = entity?.['*experienceCard'] ?? null;
+    const geoUrn: string | null            = entity?.geoLocation?.['*geo'] ?? null;
+
+    const [experienceResult, resolvedLocation] = await Promise.all([
+      // Only resolve experience card if company/title missing AND we have the URN
+      needsCompany && experienceCardUrn
+        ? this.resolveExperienceCard(experienceCardUrn)
+        : Promise.resolve(null),
+
+      // Only resolve geo if location missing AND we have the URN
+      needsLocation && geoUrn
+        ? this.resolveGeoLocation(geoUrn)
+        : Promise.resolve(null),
+    ]);
+
+    // Merge resolved values — only overwrite if still null (don't clobber
+    // values that extractLeadProfile already found from included entities)
+    if (experienceResult) {
+      profileData = {
+        ...profileData,
+        company: profileData.company ?? experienceResult.company,
+        title:   profileData.title   ?? experienceResult.title,
+      };
+    }
+
+    if (resolvedLocation) {
+      profileData = {
+        ...profileData,
+        location: profileData.location ?? resolvedLocation,
+      };
+    }
+
     return {
       success: true,
       data: entity,
       included,
-      profileData: extractLeadProfile(entity, included),
+      profileData,
     };
   }
 
   // ── sendConnectionRequest ───────────────────────────────────────────────────
 
-  /**
-   * Sends a LinkedIn connection request.
-   *   1. Resolves the target's fsd_profile URN via getProfile
-   *   2. Pre-flight checks: already connected / already invited
-   *   3. Client-side note length validation (300-char limit)
-   *   4. POSTs to the Voyager invitation endpoint
-   */
   async sendConnectionRequest(params: {
     linkedin_url: string;
     message?: string | null;
   }): Promise<LinkedInResponse> {
-    // Step 1: Resolve the profile and get all included metadata
     const profileResult = await this.getProfile(params.linkedin_url);
 
     if (!profileResult.success || !profileResult.data) {
@@ -539,9 +674,8 @@ export class LinkedInClient {
       };
     }
 
-    // Cast the data for easier access to the Profile object and the included array
     const profile = profileResult.data as any;
-    const included = profileResult.included ?? []; // Use 'included' to find relationship status
+    const included = profileResult.included ?? [];
     const targetUrn: string | null = profile?.entityUrn ?? null;
     const profileData = profileResult.profileData;
 
@@ -549,15 +683,10 @@ export class LinkedInClient {
       return { success: false, error: 'unknown_error', message: 'Could not resolve profile URN', profileData };
     }
 
-    /**
-     * Pre-check: Already 1st-degree?
-     * We search the 'included' array for the MemberRelationship object.
-     */
     const relationship = included.find(
       (i: any) => i.$type === 'com.linkedin.voyager.dash.relationships.MemberRelationship'
     );
 
-    // 'DISTANCE_1' means you are already connected.
     if (relationship?.distance?.value === 'DISTANCE_1') {
       return {
         success: false,
@@ -568,7 +697,6 @@ export class LinkedInClient {
       };
     }
 
-    // Client-side note length guard (300-char LinkedIn hard limit)
     if (params.message && params.message.length > 300) {
       return {
         success: false,
@@ -578,46 +706,33 @@ export class LinkedInClient {
       };
     }
 
-    /**
-     * Step 2: Send invitation
-     * The 'memberProfile' field must be the fsd_profile URN.
-     */
     const body: Record<string, unknown> = {
       invitee: {
         inviteeUnion: {
-          memberProfile: targetUrn
-        }
+          memberProfile: targetUrn,
+        },
       },
     };
 
-    // LinkedIn uses 'customMessage' for the invite note
     if (params.message) {
       body.customMessage = params.message;
     }
 
     const url = `${VOYAGER}/voyagerRelationshipsDashMemberRelationships?action=verifyQuotaAndCreateV2&decorationId=com.linkedin.voyager.dash.deco.relationships.InvitationCreationResultWithInvitee-2`;
 
-    // Standard headers including the critical 'csrf-token'
-    const fetchOptions = {
-      method: 'POST',
-      headers: this.headers({
-        'content-type': 'application/json; charset=UTF-8',
-        'accept': 'application/vnd.linkedin.normalized+json+2.1' //
-      }),
-      body: JSON.stringify(body),
-    };
-
-    const res = await this.fetchWithSessionRefresh(() => fetch(url, {
-      ...fetchOptions,
-      headers: this.headers({
+    const res = await this.fetchWithSessionRefresh(() =>
+      fetch(url, {
+        method: 'POST',
+        headers: this.headers({
           'content-type': 'application/json; charset=UTF-8',
-          'accept': 'application/vnd.linkedin.normalized+json+2.1'
-      }),
-    }));
+          'accept': 'application/vnd.linkedin.normalized+json+2.1',
+        }),
+        body: JSON.stringify(body),
+      })
+    );
 
     if (!res.ok) {
       const { code, message } = await this.parseErrorFromResponse(res);
-
       if (code === 'already_invited') {
         return { success: false, alreadyInvited: true, error: code, message, profileData };
       }
@@ -628,15 +743,6 @@ export class LinkedInClient {
   }
 
   // ── sendMessage ─────────────────────────────────────────────────────────────
-
-  /**
-   * Sends a direct LinkedIn message via the Messenger API.
-   * If provider_id (fsd_profile URN) is already stored in the DB,
-   * the getProfile round-trip is skipped.
-   *
-   * Note: LinkedIn requires content-type "text/plain" for this endpoint
-   * even though the body is JSON — this is intentional.
-   */
 
   async sendMessage(params: {
     linkedin_url: string;
@@ -660,8 +766,6 @@ export class LinkedInClient {
     }
 
     const url = `${VOYAGER}/voyagerMessagingDashMessengerMessages?action=createMessage`;
-
-    // ✅ trackingId must be raw binary bytes from a UUID, not a plain UUID string
     const trackingIdBytes = this.uuidToBytes(randomUUID());
 
     const baseMessage = {
@@ -704,20 +808,23 @@ export class LinkedInClient {
       'x-li-page-instance': 'urn:li:page:d_flagship3_profile_view_base;Ur5/eTnHQPqPg45p6GrC9A==',
     };
 
-    const res = await this.fetchWithSessionRefresh(() => fetch(url, {
-      method: 'POST',
-      headers: this.headers(extraHeaders),
-      body: JSON.stringify(body),
-    }));
+    const res = await this.fetchWithSessionRefresh(() =>
+      fetch(url, {
+        method: 'POST',
+        headers: this.headers(extraHeaders),
+        body: JSON.stringify(body),
+      })
+    );
 
     if (!res.ok) {
       const { code, message } = await this.parseErrorFromResponse(res);
       return { success: false, error: code, message };
     }
 
-    const responseData = await res.json();
-    return { success: true, data: responseData };
+    return { success: true, data: await res.json() };
   }
+
+  // ── fetchConversationsByIds ─────────────────────────────────────────────────
 
   async fetchConversationsByIds(conversationUrns: string[]): Promise<LinkedInResponse> {
     if (!conversationUrns.length) {
@@ -727,116 +834,108 @@ export class LinkedInClient {
     const idsExpr = `List(${conversationUrns.join(',')})`;
     const url = `${VOYAGER}/voyagerMessagingDashMessengerConversations?ids=${encodeURIComponent(idsExpr)}`;
 
-    const res = await this.fetchWithSessionRefresh(() => fetch(url, {
-      method: 'GET',
-      headers: this.headers({
-        accept: 'application/json',
-        'content-type': 'text/plain;charset=UTF-8',
-      }),
-    }));
+    const res = await this.fetchWithSessionRefresh(() =>
+      fetch(url, {
+        method: 'GET',
+        headers: this.headers({
+          accept: 'application/json',
+          'content-type': 'text/plain;charset=UTF-8',
+        }),
+      })
+    );
 
     if (!res.ok) {
       const { code, message } = await this.parseErrorFromResponse(res);
       return { success: false, error: code, message };
     }
 
-    const data = await res.json();
-    return { success: true, data };
+    return { success: true, data: await res.json() };
   }
 
-  async fetchMailboxConversations(_params?: { start?: number; count?: number; syncToken?: string }): Promise<LinkedInResponse> {
+  // ── fetchMailboxConversations ───────────────────────────────────────────────
 
+  async fetchMailboxConversations(_params?: { start?: number; count?: number; syncToken?: string }): Promise<LinkedInResponse> {
     const mailboxUrn = (this.profileUrn || '').trim();
     if (!mailboxUrn) {
       return { success: false, error: 'unknown_error', message: 'Missing mailbox URN' };
     }
 
-    // Keep request shape hardcoded, only mailboxUrn/auth are dynamic per account.
     const workingVariables = `(mailboxUrn:${encodeURIComponent(mailboxUrn)})`;
-
-    // Constructing the exact URL that worked before
     const url = `${VOYAGER}/voyagerMessagingGraphQL/graphql?queryId=${HARDCODED_MESSENGER_CONVERSATIONS_QUERY_ID}&variables=${workingVariables}`;
 
     try {
-      const res = await this.fetchWithSessionRefresh(() => fetch(url, {
-        method: 'GET',
-        headers: {
-          'accept': 'application/graphql',
-          'accept-language': 'en-US,en;q=0.8',
-          'cache-control': 'no-cache',
-          'x-restli-protocol-version': '2.0.0',
-          'csrf-token': this.jsessionid,
-          'cookie': buildCookie(this.liAt, this.jsessionid),
-        },
-      }));
+      const res = await this.fetchWithSessionRefresh(() =>
+        fetch(url, {
+          method: 'GET',
+          headers: {
+            'accept': 'application/graphql',
+            'accept-language': 'en-US,en;q=0.8',
+            'cache-control': 'no-cache',
+            'x-restli-protocol-version': '2.0.0',
+            'csrf-token': this.jsessionid,
+            'cookie': buildCookie(this.liAt, this.jsessionid),
+          },
+        })
+      );
 
-      if (res.ok) {
-        const data = await res.json();
-        return { success: true, data };
-      }
+      if (res.ok) return { success: true, data: await res.json() };
 
       const parsed = await this.parseErrorFromResponse(res);
-      
-      return { 
-        success: false, 
-        error: parsed.code,
-        message: parsed.message,
-      };
-
+      return { success: false, error: parsed.code, message: parsed.message };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Mailbox request failed';
       return { success: false, error: 'network_error', message };
     }
   }
+
+  // ── fetchConversationMessages ───────────────────────────────────────────────
+
   async fetchConversationMessages(
     conversationUrn: string,
     params?: { syncToken?: string }
   ): Promise<LinkedInResponse> {
     const encodedUrn = strictEncode(conversationUrn);
-    const variablesString = params?.syncToken 
+    const variablesString = params?.syncToken
       ? `(conversationUrn:${encodedUrn},syncToken:${strictEncode(params.syncToken)})`
       : `(conversationUrn:${encodedUrn})`;
 
     const url = `${VOYAGER}/voyagerMessagingGraphQL/graphql?queryId=${MESSENGER_MESSAGES_QUERY_ID}&variables=${variablesString}`;
 
     const threadIdMatch = conversationUrn.match(/,([^,)]+)\)$/);
-    const threadId = threadIdMatch ? threadIdMatch[1] : conversationUrn.replace(/.*[:,]/, '').replace(/\)$/, '');
+    const threadId = threadIdMatch
+      ? threadIdMatch[1]
+      : conversationUrn.replace(/.*[:,]/, '').replace(/\)$/, '');
     const refererUrl = threadId
       ? `https://www.linkedin.com/messaging/thread/${threadId}/`
       : 'https://www.linkedin.com/messaging/';
 
     try {
-      const res = await this.fetchWithSessionRefresh(() => fetch(url, {
-        method: 'GET',
-        headers: {
-          'accept': 'application/graphql',
-          'accept-language': 'en-US,en;q=0.8',
-          'cache-control': 'no-cache',
-          'x-restli-protocol-version': '2.0.0',
-          'referer': refererUrl,
-          'csrf-token': this.jsessionid,
-          'cookie': buildCookie(this.liAt, this.jsessionid),
-        },
-      }));
-            
-      if (res.ok) {
-        const data = await res.json();
-        return { success: true, data };
-      }
+      const res = await this.fetchWithSessionRefresh(() =>
+        fetch(url, {
+          method: 'GET',
+          headers: {
+            'accept': 'application/graphql',
+            'accept-language': 'en-US,en;q=0.8',
+            'cache-control': 'no-cache',
+            'x-restli-protocol-version': '2.0.0',
+            'referer': refererUrl,
+            'csrf-token': this.jsessionid,
+            'cookie': buildCookie(this.liAt, this.jsessionid),
+          },
+        })
+      );
+
+      if (res.ok) return { success: true, data: await res.json() };
 
       const parsed = await this.parseErrorFromResponse(res);
-      
-      return { 
-        success: false, 
-        error: parsed.code,
-        message: parsed.message,
-      };
-
+      return { success: false, error: parsed.code, message: parsed.message };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Messages request failed';
       return { success: false, error: 'network_error', message };
     }
   }
+
+  // ── extractConversationUrn / extractMessageUrn ──────────────────────────────
 
   extractConversationUrn(payload: unknown): string | null {
     return findStringByPrefix(payload, 'urn:li:msg_conversation:');
@@ -846,7 +945,27 @@ export class LinkedInClient {
     return findStringByPrefix(payload, 'urn:li:msg_message:');
   }
 
-  // ✅ Converts UUID string to raw binary byte string (what LinkedIn expects for trackingId)
+  // ── getRecentConnections ────────────────────────────────────────────────────
+
+  async getRecentConnections(): Promise<LinkedInResponse> {
+    const url = `${VOYAGER}/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count=40&q=search&sortType=RECENTLY_ADDED`;
+
+    const res = await this.fetchWithSessionRefresh(() =>
+      fetch(url, {
+        headers: this.headers({ 'x-li-deco-include-micro-schema': 'true' }),
+      })
+    );
+
+    if (!res.ok) {
+      const { code, message } = await this.parseErrorFromResponse(res);
+      return { success: false, error: code, message };
+    }
+
+    return { success: true, data: await res.json() };
+  }
+
+  // ── uuidToBytes ─────────────────────────────────────────────────────────────
+
   private uuidToBytes(uuid: string): string {
     const hex = uuid.replace(/-/g, '');
     let binary = '';
@@ -855,38 +974,10 @@ export class LinkedInClient {
     }
     return binary;
   }
-
-  // ── getRecentConnections ────────────────────────────────────────────────────
-
-  /**
-   * Fetches the 40 most recently accepted connections for this account.
-   * Used by check-connections to detect accepted invitations in bulk.
-   * Returns the raw `included` array — each element has `entityUrn` (fsd_profile URN).
-   */
-  async getRecentConnections(): Promise<LinkedInResponse> {
-    const url = `${VOYAGER}/relationships/dash/connections?decorationId=com.linkedin.voyager.dash.deco.web.mynetwork.ConnectionListWithProfile-16&count=40&q=search&sortType=RECENTLY_ADDED`;
-
-    const res = await this.fetchWithSessionRefresh(() => fetch(url, {
-      headers: this.headers({ 'x-li-deco-include-micro-schema': 'true' }),
-    }));
-
-    if (!res.ok) {
-      const { code, message } = await this.parseErrorFromResponse(res);
-      return { success: false, error: code, message };
-    }
-
-    const data = await res.json();
-    return { success: true, data };
-  }
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
-/**
- * Creates a LinkedInClient from a DB account record.
- * Pass a Supabase admin client + account ID as onSessionRefresh so refreshed
- * JSESSIONID values are automatically persisted to the database.
- */
 export function createLinkedInClient(
   account: { li_at: string; jsessionid: string; profile_urn: string },
   onSessionRefresh?: OnSessionRefresh
