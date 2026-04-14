@@ -94,6 +94,7 @@ export interface Lead {
   location?: string;
   public_profile_url?: string;
   enriched_at?: string;
+  replied_at?: string;
   created_at: string;
   updated_at: string;
 }

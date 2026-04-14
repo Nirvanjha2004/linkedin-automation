@@ -760,6 +760,30 @@ export async function syncMessagesForUser(
           last_message_at: latest.sent_at,
           last_external_message_id: latest.external_message_id,
         });
+
+        // ── Reply detection ───────────────────────────────────────────────────
+        // If any of the newly inserted messages are inbound (from the lead),
+        // mark the lead as 'replied' — but only if they haven't already replied
+        // (avoid overwriting a terminal status like 'completed').
+        const hasInbound = rowsToInsert.some((m) => m.direction === 'inbound');
+        if (hasInbound) {
+          // Use the earliest inbound message timestamp as replied_at
+          const firstInbound = rowsToInsert.find((m) => m.direction === 'inbound');
+          await supabase
+            .from('leads')
+            .update({
+              status: 'replied',
+              replied_at: firstInbound!.sent_at,
+              last_action_at: firstInbound!.sent_at,
+            })
+            .eq('id', local.lead_id)
+            .in('status', [
+              'message_sent',
+              'followup_1_sent',
+              'followup_2_sent',
+              'connected',
+            ]);
+        }
       }
 
       await supabase
