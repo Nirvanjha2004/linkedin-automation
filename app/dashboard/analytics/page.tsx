@@ -275,7 +275,8 @@ export default function AnalyticsPage() {
       const allLeads: Array<{ campaign_id: string; status: string }> = leadsData.leads || [];
 
       // Group lead counts by campaign_id
-      const leadsByCampaign = new Map<string, Record<string, number>>();
+      type LeadStats = { total_leads: number; connected: number; message_sent: number; replied: number; failed: number };
+      const leadsByCampaign = new Map<string, LeadStats>();
       for (const lead of allLeads) {
         if (!leadsByCampaign.has(lead.campaign_id)) {
           leadsByCampaign.set(lead.campaign_id, {
