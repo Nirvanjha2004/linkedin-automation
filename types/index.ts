@@ -87,6 +87,7 @@ export interface Lead {
   follow_up_2_sent_at?: string;
   last_action_at?: string;
   notes?: string;
+  tags?: string[];
   // Enriched from Unipile profile fetch
   provider_id?: string;
   profile_pic_url?: string;

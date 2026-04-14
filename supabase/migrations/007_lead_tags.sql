@@ -1,0 +1,4 @@
+ALTER TABLE leads
+  ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
+
+CREATE INDEX IF NOT EXISTS idx_leads_tags ON leads USING GIN(tags);

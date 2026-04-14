@@ -8,8 +8,9 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { cn } from '@/lib/utils';
 import {
   ExternalLink, ChevronLeft, ChevronRight,
-  Users, MapPin, ChevronDown, Search, X,
+  Users, MapPin, ChevronDown, Search, X, Tag, FileText,
 } from 'lucide-react';
+import LeadDrawer from './LeadDrawer';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ function LeadAvatar({ lead }: { lead: Lead }) {
   if (lead.profile_pic_url && !imgFailed) {
     return (
       <img
-        src={lead.profile_pic_url}
+        src={`/api/proxy/image?url=${encodeURIComponent(lead.profile_pic_url)}`}
         alt={name}
         onError={() => setImgFailed(true)}
         className="h-8 w-8 rounded-full object-cover shrink-0 bg-zinc-100 border border-zinc-200"
@@ -284,6 +285,7 @@ export default function LeadTable({ campaignId }: LeadTableProps) {
   const [pages, setPages] = useState(1);
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
   const fetchLeads = useCallback(async () => {
     setLoading(true);
@@ -305,6 +307,11 @@ export default function LeadTable({ campaignId }: LeadTableProps) {
     setStatusFilter(v);
     setPage(1);
   };
+
+  const handleLeadUpdate = useCallback((updated: Pick<Lead, 'id' | 'notes' | 'tags'>) => {
+    setLeads(prev => prev.map(l => l.id === updated.id ? { ...l, ...updated } : l));
+    setSelectedLead(prev => prev?.id === updated.id ? { ...prev, ...updated } : prev);
+  }, []);
 
   // Client-side search filter applied on top of the server-paginated results
   const visibleLeads = useMemo(() => {
@@ -371,16 +378,27 @@ export default function LeadTable({ campaignId }: LeadTableProps) {
               visibleLeads.map((lead) => {
                 const name = lead.full_name || `${lead.first_name ?? ''} ${lead.last_name ?? ''}`.trim() || '—';
                 return (
-                  <tr key={lead.id} className="group hover:bg-zinc-50/80 transition-colors">
+                  <tr
+                    key={lead.id}
+                    onClick={() => setSelectedLead(lead)}
+                    className="group hover:bg-zinc-50/80 transition-colors cursor-pointer"
+                  >
 
                     {/* Person: avatar + name + headline */}
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
                         <LeadAvatar lead={lead} />
                         <div className="min-w-0">
-                          <p className="text-sm font-medium text-zinc-900 truncate leading-snug">
-                            {name}
-                          </p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-sm font-medium text-zinc-900 truncate leading-snug">
+                              {name}
+                            </p>
+                            {lead.notes && (
+                              <span title="Has notes" className="text-zinc-300 group-hover:text-zinc-400 transition-colors shrink-0">
+                                <FileText className="h-3 w-3" />
+                              </span>
+                            )}
+                          </div>
                           {lead.headline ? (
                             <p className="text-xs text-zinc-400 truncate max-w-[200px] mt-0.5 leading-snug">
                               {lead.headline}
@@ -430,17 +448,26 @@ export default function LeadTable({ campaignId }: LeadTableProps) {
                       )}
                     </td>
 
-                    {/* LinkedIn link — always visible at 50%, full on hover */}
+                    {/* Tags preview + LinkedIn link */}
                     <td className="px-4 py-3.5">
-                      <a
-                        href={lead.linkedin_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="Open LinkedIn profile"
-                        className="opacity-50 hover:opacity-100 transition-opacity inline-flex items-center justify-center h-7 w-7 rounded-lg text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
+                      <div className="flex items-center justify-end gap-2">
+                        {lead.tags && lead.tags.length > 0 && (
+                          <div className="flex items-center gap-1">
+                            <Tag className="h-3 w-3 text-zinc-300 group-hover:text-zinc-400 transition-colors" />
+                            <span className="text-xs text-zinc-400 tabular-nums">{lead.tags.length}</span>
+                          </div>
+                        )}
+                        <a
+                          href={lead.linkedin_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open LinkedIn profile"
+                          onClick={e => e.stopPropagation()}
+                          className="opacity-50 hover:opacity-100 transition-opacity inline-flex items-center justify-center h-7 w-7 rounded-lg text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -460,6 +487,12 @@ export default function LeadTable({ campaignId }: LeadTableProps) {
           onNext={() => setPage(p => Math.min(pages, p + 1))}
         />
       )}
+
+      <LeadDrawer
+        lead={selectedLead}
+        onClose={() => setSelectedLead(null)}
+        onUpdate={handleLeadUpdate}
+      />
     </div>
   );
 }
