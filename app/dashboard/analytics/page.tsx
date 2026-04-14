@@ -285,8 +285,10 @@ export default function AnalyticsPage() {
         }
         const s = leadsByCampaign.get(lead.campaign_id)!;
         s.total_leads++;
-        if (lead.status === 'connected')                                          s.connected++;
-        // message_sent covers all statuses that come after the initial message
+        // connected = accepted the request (any status past connection_sent)
+        if (['connected', 'message_sent', 'followup_1_sent', 'followup_2_sent',
+             'replied', 'completed'].includes(lead.status))                       s.connected++;
+        // message_sent = ever received an initial message
         if (['message_sent', 'followup_1_sent', 'followup_2_sent',
              'replied', 'completed'].includes(lead.status))                       s.message_sent++;
         if (lead.status === 'replied')                                            s.replied++;

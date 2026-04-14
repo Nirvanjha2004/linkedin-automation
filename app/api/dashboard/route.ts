@@ -11,8 +11,6 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-
     const [campaignsRes, leadsRes] = await Promise.all([
       supabase
         .from('campaigns')
@@ -22,29 +20,24 @@ export async function GET() {
 
       supabase
         .from('leads')
-        .select('status, connection_sent_at, message_sent_at, campaigns!inner(user_id)')
+        .select('status, campaigns!inner(user_id)')
         .eq('campaigns.user_id', user.id),
     ]);
 
     const campaigns = campaignsRes.data ?? [];
     const leads = leadsRes.data ?? [];
 
-    // Count leads whose connection/message was sent in the last 30 days
-    const connections_sent = leads.filter(
-      (l) => l.connection_sent_at && l.connection_sent_at >= thirtyDaysAgo
-    ).length;
+    const CONNECTED_STATUSES = ['connected', 'message_sent', 'followup_1_sent', 'followup_2_sent', 'replied', 'completed'];
+    const MESSAGED_STATUSES  = ['message_sent', 'followup_1_sent', 'followup_2_sent', 'replied', 'completed'];
 
-    const messages_sent = leads.filter(
-      (l) =>
-        l.message_sent_at && l.message_sent_at >= thirtyDaysAgo
-    ).length;
-
-    const replied = leads.filter((l) => l.status === 'replied').length;
+    const connections_sent = leads.filter((l: { status: string }) => CONNECTED_STATUSES.includes(l.status)).length;
+    const messages_sent    = leads.filter((l: { status: string }) => MESSAGED_STATUSES.includes(l.status)).length;
+    const replied          = leads.filter((l: { status: string }) => l.status === 'replied').length;
 
     return NextResponse.json({
       stats: {
         total_campaigns: campaigns.length,
-        active_campaigns: campaigns.filter((c) => c.status === 'active').length,
+        active_campaigns: campaigns.filter((c: { status: string }) => c.status === 'active').length,
         total_leads: leads.length,
         connections_sent,
         messages_sent,

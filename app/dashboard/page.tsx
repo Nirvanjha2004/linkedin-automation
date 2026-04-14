@@ -144,16 +144,16 @@ export default function DashboardPage() {
               <StatCard
                 label="Total Leads"
                 value={data?.total_leads === 0 ? '—' : (data?.total_leads ?? '—')}
-                sub="Last 30 days"
+                sub="across all campaigns"
                 icon={Users}
                 iconColor="text-violet-600"
                 iconBg="bg-violet-50"
                 href="/dashboard/leads"
               />
               <StatCard
-                label="Connections Sent"
+                label="Connections Accepted"
                 value={data?.connections_sent === 0 ? '—' : (data?.connections_sent ?? '—')}
-                sub="Last 30 days"
+                sub="all time"
                 icon={UserCheck}
                 iconColor="text-emerald-600"
                 iconBg="bg-emerald-50"
@@ -162,7 +162,7 @@ export default function DashboardPage() {
               <StatCard
                 label="Messages Sent"
                 value={data?.messages_sent === 0 ? '—' : (data?.messages_sent ?? '—')}
-                sub="Last 30 days"
+                sub="all time"
                 icon={MessageSquare}
                 iconColor="text-amber-600"
                 iconBg="bg-amber-50"
