@@ -175,6 +175,10 @@ export interface Conversation {
   last_message_at?: string;
   created_at: string;
   updated_at: string;
+  // AI Automation fields
+  ai_enabled?: boolean;
+  ai_status?: AIStatus;
+  ai_booking_stage?: AIBookingStage;
 }
 
 export interface ConversationMessage {
@@ -226,4 +230,83 @@ export interface BillingStatus {
   estimated_next_invoice: number;
   grace_period_ends_at?: string;
   current_period_end?: string;
+}
+
+// ── AI Inbox Automation ───────────────────────────────────────────────────────
+
+export type AIStatus = 'idle' | 'active' | 'paused' | 'completed' | 'error';
+export type AIBookingStage = 'qualifying' | 'slot_proposal' | 'slot_confirmation' | 'done';
+export type AIJobStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type AILogStatus = 'sent' | 'skipped' | 'error';
+
+export interface AIAutomationConfig {
+  id: string;
+  user_id: string;
+  persona: string;
+  meeting_objective: string;
+  gcal_refresh_token: string | null;
+  gcal_token_error: boolean;
+  meeting_duration_min: number;
+  timezone: string;
+  default_ai_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AIReplyJob {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  trigger_message_id: string;
+  status: AIJobStatus;
+  retry_count: number;
+  execute_at: string;
+  error_message?: string;
+  created_at: string;
+}
+
+export interface AIAutomationLog {
+  id: string;
+  conversation_id: string;
+  user_id: string;
+  trigger_message_id?: string;
+  generated_reply?: string;
+  status: AILogStatus;
+  error_message?: string;
+  booking_stage?: string;
+  created_at: string;
+}
+
+export interface TimeSlot {
+  start: string;  // ISO 8601
+  end: string;    // ISO 8601
+  label: string;  // human-readable, e.g. "Tuesday 14 Jan at 2:00 PM"
+}
+
+export interface LeadContext {
+  id: string;
+  full_name: string;
+  first_name?: string;
+  company?: string;
+  title?: string;
+  headline?: string;
+  location?: string;
+  linkedin_url?: string;
+}
+
+export interface MessageHistoryItem {
+  id: string;
+  content: string;
+  direction: 'inbound' | 'outbound';
+  sent_at: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PromptContext {
+  persona: string;
+  meetingObjective: string;
+  lead: LeadContext;
+  messageHistory: MessageHistoryItem[];
+  bookingStage: AIBookingStage;
+  proposedSlots?: TimeSlot[];
 }
