@@ -8,7 +8,7 @@ import {
   Bold, Italic, Underline, List, Link as LinkIcon, ChevronDown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { LinkedInAccount } from '@/types';
+import { AIStatus, LinkedInAccount } from '@/types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -19,6 +19,8 @@ interface ConversationSummary {
   last_message_preview: string;
   lead: { id: string; name: string; profile_pic_url?: string | null; status: string };
   account: { id: string; name: string };
+  ai_enabled?: boolean;
+  ai_status?: AIStatus; // 'idle' | 'active' | 'paused' | 'completed' | 'error'
 }
 
 interface MessageItem {
@@ -28,12 +30,15 @@ interface MessageItem {
   content_text: string;
   content_html?: string | null;
   sent_at: string;
+  metadata?: { source?: string; [key: string]: unknown };
 }
 
 interface ConversationDetails {
   id: string;
   lead: { id: string; name: string; profile_pic_url?: string | null; status: string };
   account: { id: string; name: string };
+  ai_enabled?: boolean;
+  ai_status?: AIStatus;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -128,10 +133,14 @@ function ConvItem({
   conv,
   active,
   onClick,
+  onToggleAI,
+  togglingAI,
 }: {
   conv: ConversationSummary;
   active: boolean;
   onClick: () => void;
+  onToggleAI: (id: string, enabled: boolean) => Promise<void>;
+  togglingAI: boolean;
 }) {
   return (
     <button
@@ -159,6 +168,24 @@ function ConvItem({
           {conv.unread_count}
         </span>
       )}
+      <div
+        className="shrink-0 flex items-center"
+        onClick={(e) => { e.stopPropagation(); void onToggleAI(conv.id, !conv.ai_enabled); }}
+      >
+        {togglingAI ? (
+          <Loader2 className="h-3 w-3 animate-spin text-indigo-400" />
+        ) : (
+          <div className={cn(
+            'w-7 h-4 rounded-full transition-colors relative',
+            conv.ai_enabled ? 'bg-indigo-500' : 'bg-zinc-200'
+          )}>
+            <div className={cn(
+              'absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-transform',
+              conv.ai_enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            )} />
+          </div>
+        )}
+      </div>
     </button>
   );
 }
@@ -228,6 +255,11 @@ function MessageBubble({
         <span className="text-[11px] text-zinc-400 px-1 tabular-nums">
           {fmtTime(msg.sent_at)}
         </span>
+        {isOutbound && msg.metadata?.source === 'ai_agent' && (
+          <span className="text-[10px] font-medium text-indigo-400 px-1.5 py-0.5 rounded-full bg-indigo-50 border border-indigo-100">
+            AI
+          </span>
+        )}
       </div>
 
       {/* Spacer for outbound to keep bubble from touching edge */}
@@ -300,6 +332,9 @@ export default function MessagesInbox() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [sending, setSending] = useState(false);
+  const [togglingAIConvId, setTogglingAIConvId] = useState<string | null>(null);
+  const [aiActionLoading, setAiActionLoading] = useState(false);
+  const [aiErrorMessage, setAiErrorMessage] = useState<string | null>(null);
 
   const [conversationPage, setConversationPage] = useState(1);
   const [conversationPages, setConversationPages] = useState(1);
@@ -387,7 +422,72 @@ export default function MessagesInbox() {
   useEffect(() => { void fetchAccounts(); }, [fetchAccounts]);
   useEffect(() => { setConversationPage(1); void fetchConversations(1, false); }, [fetchConversations]);
 
+  // ── AI status error log ──────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (activeConversation?.ai_status === 'error') {
+      axios.get(`/api/ai-automation/conversations/${activeConversation.id}/logs`)
+        .then(({ data }) => {
+          const errorLog = data.logs?.find((l: { status: string; error_message?: string }) => l.status === 'error');
+          setAiErrorMessage(errorLog?.error_message ?? 'An error occurred');
+        })
+        .catch(() => setAiErrorMessage('An error occurred'));
+    } else {
+      setAiErrorMessage(null);
+    }
+  }, [activeConversation?.id, activeConversation?.ai_status]);
+
   // ── Actions ──────────────────────────────────────────────────────────────────
+
+  const handleToggleAI = useCallback(async (convId: string, enabled: boolean) => {
+    setTogglingAIConvId(convId);
+    try {
+      const { data } = await axios.patch<{ id: string; ai_enabled: boolean; ai_status: AIStatus }>(
+        `/api/ai-automation/conversations/${convId}/toggle`,
+        { enabled },
+      );
+      setConversations(prev => prev.map(c =>
+        c.id === convId ? { ...c, ai_enabled: data.ai_enabled, ai_status: data.ai_status } : c
+      ));
+      if (activeConversation?.id === convId) {
+        setActiveConversation(prev => prev ? { ...prev, ai_enabled: data.ai_enabled, ai_status: data.ai_status } : prev);
+      }
+      toast.success(data.ai_enabled ? 'AI automation enabled' : 'AI automation disabled');
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      toast.error(e?.response?.data?.error || 'Failed to toggle AI');
+    } finally {
+      setTogglingAIConvId(null);
+    }
+  }, [activeConversation]);
+
+  const handleTakeover = useCallback(async () => {
+    if (!activeConversation) return;
+    setAiActionLoading(true);
+    try {
+      await axios.post(`/api/ai-automation/conversations/${activeConversation.id}/takeover`);
+      setActiveConversation(prev => prev ? { ...prev, ai_status: 'paused' } : prev);
+      setConversations(prev => prev.map(c =>
+        c.id === activeConversation.id ? { ...c, ai_status: 'paused' } : c
+      ));
+      toast.success('Took over conversation');
+    } catch { toast.error('Failed to take over'); }
+    finally { setAiActionLoading(false); }
+  }, [activeConversation]);
+
+  const handleResumeAI = useCallback(async () => {
+    if (!activeConversation) return;
+    setAiActionLoading(true);
+    try {
+      await axios.post(`/api/ai-automation/conversations/${activeConversation.id}/resume`);
+      setActiveConversation(prev => prev ? { ...prev, ai_status: 'active' } : prev);
+      setConversations(prev => prev.map(c =>
+        c.id === activeConversation.id ? { ...c, ai_status: 'active' } : c
+      ));
+      toast.success('AI automation resumed');
+    } catch { toast.error('Failed to resume AI'); }
+    finally { setAiActionLoading(false); }
+  }, [activeConversation]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -531,6 +631,8 @@ export default function MessagesInbox() {
                     conv={conv}
                     active={activeConversation?.id === conv.id}
                     onClick={() => void loadConversation(conv.id)}
+                    onToggleAI={handleToggleAI}
+                    togglingAI={togglingAIConvId === conv.id}
                   />
                 ))}
               </div>
@@ -575,6 +677,49 @@ export default function MessagesInbox() {
                     via {activeConversation.account.name}
                   </p>
                 </div>
+                {activeConversation.ai_status && activeConversation.ai_status !== 'idle' && (
+                  <div className="ml-auto flex items-center gap-2">
+                    <div className="flex flex-col items-end">
+                      <span className={cn(
+                        'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium',
+                        activeConversation.ai_status === 'active' && 'bg-emerald-100 text-emerald-700',
+                        activeConversation.ai_status === 'paused' && 'bg-amber-100 text-amber-700',
+                        activeConversation.ai_status === 'error' && 'bg-red-100 text-red-700',
+                        activeConversation.ai_status === 'completed' && 'bg-zinc-100 text-zinc-500',
+                      )}>
+                        <span className={cn(
+                          'h-1.5 w-1.5 rounded-full',
+                          activeConversation.ai_status === 'active' && 'bg-emerald-500',
+                          activeConversation.ai_status === 'paused' && 'bg-amber-500',
+                          activeConversation.ai_status === 'error' && 'bg-red-500',
+                          activeConversation.ai_status === 'completed' && 'bg-zinc-400',
+                        )} />
+                        AI {activeConversation.ai_status}
+                      </span>
+                      {activeConversation.ai_status === 'error' && aiErrorMessage && (
+                        <p className="text-[11px] text-red-600 mt-0.5">{aiErrorMessage}</p>
+                      )}
+                    </div>
+                    {activeConversation.ai_status === 'active' && (
+                      <button
+                        onClick={handleTakeover}
+                        disabled={aiActionLoading}
+                        className="h-7 px-2.5 rounded-lg border border-zinc-200 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 transition-colors"
+                      >
+                        {aiActionLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Take over'}
+                      </button>
+                    )}
+                    {activeConversation.ai_status === 'paused' && (
+                      <button
+                        onClick={handleResumeAI}
+                        disabled={aiActionLoading}
+                        className="h-7 px-2.5 rounded-lg bg-indigo-600 text-white text-xs font-medium hover:bg-indigo-700 disabled:opacity-60 transition-colors"
+                      >
+                        {aiActionLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Resume AI'}
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Messages area */}

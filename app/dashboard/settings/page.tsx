@@ -8,15 +8,16 @@ import { Button } from '@/components/ui/button';
 import {
   User, CreditCard, Plug, Shield, Loader2,
   Copy, Eye, EyeOff, Check, AlertTriangle,
-  ChevronRight, Zap, AlertCircle,
+  ChevronRight, Zap, AlertCircle, Bot,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { UpgradeModal } from '@/components/billing/UpgradeModal';
+import axios from 'axios';
 import type { BillingStatus } from '@/types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Section = 'profile' | 'billing' | 'integrations' | 'security';
+type Section = 'profile' | 'billing' | 'integrations' | 'security' | 'ai';
 
 interface UserData {
   email?: string;
@@ -174,10 +175,11 @@ function ConfirmModal({
 // ─── Nav items ────────────────────────────────────────────────────────────────
 
 const NAV: { id: Section; label: string; icon: React.ElementType }[] = [
-  { id: 'profile',      label: 'Profile',      icon: User      },
-  { id: 'billing',      label: 'Billing',       icon: CreditCard },
-  { id: 'integrations', label: 'Integrations',  icon: Plug      },
-  { id: 'security',     label: 'Security',      icon: Shield    },
+  { id: 'profile',      label: 'Profile',        icon: User      },
+  { id: 'billing',      label: 'Billing',         icon: CreditCard },
+  { id: 'integrations', label: 'Integrations',    icon: Plug      },
+  { id: 'security',     label: 'Security',        icon: Shield    },
+  { id: 'ai',           label: 'AI Automation',   icon: Bot       },
 ];
 
 // ─── Sections ─────────────────────────────────────────────────────────────────
@@ -546,6 +548,209 @@ function SecuritySection({ user }: { user: UserData | null }) {
   );
 }
 
+// ─── AI Automation Section ────────────────────────────────────────────────────
+
+const TIMEZONES = [
+  'UTC',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'Europe/London',
+  'Europe/Paris',
+  'Asia/Tokyo',
+  'Asia/Singapore',
+  'Australia/Sydney',
+];
+
+interface AIConfig {
+  persona: string;
+  meeting_objective: string;
+  meeting_duration_min: number;
+  timezone: string;
+  default_ai_enabled: boolean;
+  gcal_connected?: boolean;
+  gcal_token_error?: boolean;
+}
+
+function AIAutomationSection() {
+  const [config, setConfig] = useState<AIConfig>({
+    persona: '',
+    meeting_objective: '',
+    meeting_duration_min: 30,
+    timezone: 'UTC',
+    default_ai_enabled: false,
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [durationError, setDurationError] = useState('');
+
+  useEffect(() => {
+    axios.get<AIConfig>('/api/ai-automation/config')
+      .then(res => setConfig(res.data))
+      .catch(() => toast.error('Failed to load AI automation config'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const validateDuration = (val: number) => {
+    if (val < 15 || val > 120) {
+      setDurationError('Duration must be between 15 and 120 minutes');
+      return false;
+    }
+    setDurationError('');
+    return true;
+  };
+
+  const handleDurationChange = (val: number) => {
+    setConfig(c => ({ ...c, meeting_duration_min: val }));
+    validateDuration(val);
+  };
+
+  const save = async () => {
+    if (!validateDuration(config.meeting_duration_min)) return;
+    setSaving(true);
+    try {
+      await axios.patch('/api/ai-automation/config', config);
+      toast.success('AI automation settings saved');
+    } catch {
+      toast.error('Failed to save AI automation settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Google Calendar token error banner */}
+      {config.gcal_token_error && (
+        <div className="flex items-start gap-3 p-4 rounded-lg bg-red-50 border border-red-200">
+          <AlertCircle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-red-800">Google Calendar connection expired</p>
+            <p className="text-xs text-red-700 mt-0.5">
+              Your Google Calendar connection has expired. Please reconnect to continue booking meetings.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <SettingsSection
+        title="Google Calendar"
+        description="Connect your Google Calendar so the AI can check your availability and book meetings"
+      >
+        {config.gcal_connected ? (
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
+              <span className="text-sm text-zinc-700">Google Calendar</span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                <Check className="h-3 w-3" /> Connected
+              </span>
+            </div>
+            <a
+              href="/api/ai-automation/google/connect"
+              className="text-xs text-zinc-500 hover:text-zinc-700 underline underline-offset-2 transition-colors"
+            >
+              Reconnect
+            </a>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="h-2 w-2 rounded-full bg-zinc-300 shrink-0" />
+              <span className="text-sm text-zinc-500">Google Calendar not connected</span>
+            </div>
+            <a href="/api/ai-automation/google/connect">
+              <Button size="sm" variant="outline">
+                Connect Google Calendar
+              </Button>
+            </a>
+          </div>
+        )}
+      </SettingsSection>
+
+      <SettingsSection
+        title="AI Automation"
+        description="Configure how the AI assistant handles your conversations"
+        footer={
+          <Button size="sm" onClick={save} disabled={saving || !!durationError}>
+            {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Save changes
+          </Button>
+        }
+      >
+        <Field label="AI Persona" hint="Describe how the AI should present itself in conversations">
+          <textarea
+            value={config.persona}
+            onChange={e => setConfig(c => ({ ...c, persona: e.target.value }))}
+            className={cn(inputCls, 'resize-none')}
+            rows={3}
+            placeholder="e.g. A friendly sales assistant who helps schedule product demos..."
+          />
+        </Field>
+
+        <Field label="Meeting Objective" hint="What is the goal of the meetings the AI is trying to schedule?">
+          <textarea
+            value={config.meeting_objective}
+            onChange={e => setConfig(c => ({ ...c, meeting_objective: e.target.value }))}
+            className={cn(inputCls, 'resize-none')}
+            rows={3}
+            placeholder="e.g. Schedule a 30-minute product demo call..."
+          />
+        </Field>
+
+        <Field label="Meeting Duration (minutes)">
+          <input
+            type="number"
+            min={15}
+            max={120}
+            value={config.meeting_duration_min}
+            onChange={e => handleDurationChange(Number(e.target.value))}
+            className={cn(inputCls, durationError && 'border-red-300 focus:ring-red-400')}
+          />
+          {durationError && (
+            <p className="text-xs text-red-500 mt-1">{durationError}</p>
+          )}
+        </Field>
+
+        <Field label="Timezone">
+          <select
+            value={config.timezone}
+            onChange={e => setConfig(c => ({ ...c, timezone: e.target.value }))}
+            className={inputCls}
+          >
+            {TIMEZONES.map(tz => (
+              <option key={tz} value={tz}>{tz}</option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Enable AI by default for new conversations">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={config.default_ai_enabled}
+              onChange={e => setConfig(c => ({ ...c, default_ai_enabled: e.target.checked }))}
+              className="h-4 w-4 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span className="text-sm text-zinc-600">
+              Automatically enable AI for new incoming conversations
+            </span>
+          </label>
+        </Field>
+      </SettingsSection>
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -598,6 +803,7 @@ export default function SettingsPage() {
             {active === 'billing'      && <BillingSection />}
             {active === 'integrations' && <IntegrationsSection />}
             {active === 'security'     && <SecuritySection user={user} />}
+            {active === 'ai'           && <AIAutomationSection />}
           </div>
         </main>
 

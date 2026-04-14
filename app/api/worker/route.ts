@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createAdminClient } from '@/lib/supabase/server';
 import { createLinkedInClient, LeadProfileData } from '@/lib/linkedin/client';
 import { isValidCronRequest, cronUnauthorized } from '@/lib/cron-auth';
+import { processAIReplyJob } from '@/lib/ai/conversation-handler';
+import { getRedisClient } from '@/lib/redis/client';
 
 /** Replaces {{first_name}}, {{last_name}}, {{full_name}}, {{company}}, {{title}} in a template */
 function personalize(template: string, lead: Record<string, string | null | undefined>): string {
@@ -32,6 +34,14 @@ export async function POST(request: NextRequest) {
   const currentTime = new Date();
 
   try {
+    // Cleanup: reset AI reply jobs stuck in 'processing' for > 10 minutes
+    const stuckCutoff = new Date(currentTime.getTime() - 10 * 60 * 1000).toISOString();
+    await supabase
+      .from('ai_reply_jobs')
+      .update({ status: 'pending' })
+      .eq('status', 'processing')
+      .lte('updated_at', stuckCutoff);
+
     // 1. Fetch all queued actions whose execute_at time has passed
     const { data: readyActions, error: fetchError } = await supabase
       .from('action_queue')
@@ -299,12 +309,86 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // ── AI Reply Jobs ─────────────────────────────────────────────────────────
+    // Poll ai_reply_jobs for pending jobs whose execute_at has passed
+    const { data: pendingAIJobs } = await supabase
+      .from('ai_reply_jobs')
+      .select('id, conversation_id, user_id, trigger_message_id')
+      .eq('status', 'pending')
+      .lte('execute_at', currentTime.toISOString())
+      .order('execute_at', { ascending: true })
+      .limit(10);
+
+    let aiProcessed = 0;
+    let aiFailed = 0;
+
+    for (const job of pendingAIJobs ?? []) {
+      // Atomically claim the job
+      const { error: claimError } = await supabase
+        .from('ai_reply_jobs')
+        .update({ status: 'processing', updated_at: currentTime.toISOString() })
+        .eq('id', job.id)
+        .eq('status', 'pending');
+
+      if (claimError) continue;
+
+      // Acquire Redis lock to prevent duplicate execution
+      const redis = getRedisClient();
+      const lockKey = `ai_reply_job:${job.id}`;
+      const lockAcquired = await redis.set(lockKey, '1', { nx: true, ex: 300 });
+
+      if (!lockAcquired) continue;
+
+      try {
+        const result = await processAIReplyJob(supabase, {
+          jobId: job.id,
+          conversationId: job.conversation_id,
+          userId: job.user_id,
+          triggerMessageId: job.trigger_message_id,
+        });
+
+        if (result.status === 'sent' || result.status === 'skipped') {
+          await supabase
+            .from('ai_reply_jobs')
+            .update({ status: 'completed', updated_at: new Date().toISOString() })
+            .eq('id', job.id);
+          aiProcessed++;
+        } else {
+          // 'error' — the handler already updated retry_count / status / ai_status
+          // Only mark as failed if the handler didn't reschedule it
+          const { data: jobState } = await supabase
+            .from('ai_reply_jobs')
+            .select('status')
+            .eq('id', job.id)
+            .single();
+          if (jobState?.status === 'processing') {
+            await supabase
+              .from('ai_reply_jobs')
+              .update({ status: 'failed', updated_at: new Date().toISOString() })
+              .eq('id', job.id);
+          }
+          aiFailed++;
+        }
+      } catch (err: unknown) {
+        const error = err as Error;
+        await supabase
+          .from('ai_reply_jobs')
+          .update({ status: 'failed', error_message: error.message, updated_at: new Date().toISOString() })
+          .eq('id', job.id);
+        aiFailed++;
+      } finally {
+        await redis.del(lockKey);
+      }
+    }
+
     return NextResponse.json({
       success: true,
       total_ready: readyActions.length,
       processed,
       failed,
       results,
+      ai_processed: aiProcessed,
+      ai_failed: aiFailed,
       timestamp: currentTime.toISOString(),
     });
   } catch (err: unknown) {

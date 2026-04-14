@@ -784,6 +784,34 @@ export async function syncMessagesForUser(
               'connected',
             ]);
         }
+
+        // ── AI reply job enqueue ──────────────────────────────────────────────────────
+        // If any newly inserted messages are inbound, check if this conversation has
+        // ai_enabled = true and ai_status = 'active'. If so, upsert a pending AI reply job.
+        if (hasInbound) {
+          const { data: convAiState } = await supabase
+            .from('conversations')
+            .select('ai_enabled, ai_status')
+            .eq('id', local.id)
+            .maybeSingle();
+
+          if (convAiState?.ai_enabled === true && convAiState?.ai_status === 'active') {
+            const firstInboundRow = rowsToInsert.find((m) => m.direction === 'inbound');
+            await supabase
+              .from('ai_reply_jobs')
+              .upsert(
+                {
+                  conversation_id: local.id,
+                  user_id: userId,
+                  trigger_message_id: firstInboundRow!.external_message_id,
+                  status: 'pending',
+                  retry_count: 0,
+                  execute_at: new Date().toISOString(),
+                },
+                { ignoreDuplicates: true }
+              );
+          }
+        }
       }
 
       await supabase

@@ -70,7 +70,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 9: Prompt contains all required context components** — for any `fc.record({ persona: fc.string(), objective: fc.string(), lead: leadArb, history: fc.array(msgArb, { minLength: 1 }) })`, assert the returned string contains the persona text, meeting objective, lead name, and content of the most recent message
     - **Validates: Requirements 4.4**
 
-- [ ] 5. AI slot parser (`lib/ai/slot-parser.ts`)
+- [x] 5. AI slot parser (`lib/ai/slot-parser.ts`)
   - [x] 5.1 Implement `parseSlotSelection`
     - Create `lib/ai/slot-parser.ts`
     - Accept `(leadMessage: string, proposedSlots: TimeSlot[]): SlotParseResult`
@@ -82,8 +82,8 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 16: Unambiguous slot selection is always parsed correctly** — for any `fc.array(slotArb, { minLength: 1, maxLength: 3 })` and a message that unambiguously references exactly one slot, assert `{ type: 'selected' }` is returned; for zero or multiple references, assert `{ type: 'ambiguous' }` or `{ type: 'none' }`
     - **Validates: Requirements 7.1, 7.6**
 
-- [~] 6. AI conversation handler (`lib/ai/conversation-handler.ts`)
-  - [~] 6.1 Implement `processAIReplyJob` — context fetching and guards
+- [x] 6. AI conversation handler (`lib/ai/conversation-handler.ts`)
+  - [x] 6.1 Implement `processAIReplyJob` — context fetching and guards
     - Create `lib/ai/conversation-handler.ts`
     - Implement `processAIReplyJob(supabase, input: AIHandlerInput): Promise<AIHandlerResult>`
     - Fetch conversation + `ai_status` + `ai_booking_stage`; bail with `skipped` if not `active`
@@ -93,7 +93,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - Fetch `ai_automation_config` for persona, objective, meeting duration, timezone
     - _Requirements: 4.1, 4.2, 4.3, 9.4_
 
-  - [~] 6.2 Implement outbound message count guard and closing message
+  - [x] 6.2 Implement outbound message count guard and closing message
     - Count outbound messages with `metadata->>'source' = 'ai_agent'`
     - If count ≥ 5 with no interest signal, set `ai_status = 'completed'`, send closing message, write log
     - _Requirements: 5.5_
@@ -102,7 +102,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 12: Agent stops after 5 outbound messages without interest** — for any `fc.integer({ min: 0, max: 10 })` outbound count and no interest signal, assert `ai_status` becomes `'completed'` when count ≥ 5 and remains `'active'` when count < 5
     - **Validates: Requirements 5.5**
 
-  - [~] 6.4 Implement booking stage routing and LLM call
+  - [x] 6.4 Implement booking stage routing and LLM call
     - Determine current `ai_booking_stage` and select prompt template via `buildPrompt`
     - Call LLM API (OpenAI/Anthropic) with 30-second timeout
     - On timeout or non-retryable error: set `ai_status = 'error'`, write log, return `{ status: 'error' }`
@@ -113,7 +113,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 20: Retry backoff follows 2^retry_count schedule** — for any `fc.integer({ min: 0, max: 2 })` retry count N, assert `execute_at ≈ now + 2^N minutes` (within 1-second tolerance); at retry_count = 3, assert `ai_status = 'error'`
     - **Validates: Requirements 10.4**
 
-  - [~] 6.6 Implement Google Calendar integration within handler
+  - [x] 6.6 Implement Google Calendar integration within handler
     - When `ai_booking_stage = 'slot_proposal'`: call `GoogleCalendarClient.getAvailableSlots`, select up to 3 slots, include in prompt
     - When `ai_booking_stage = 'slot_confirmation'`: call `parseSlotSelection` on the latest inbound message; if ambiguous, ask for clarification; if selected, call `createEvent`
     - On successful event creation: send confirmation message, set `ai_status = 'completed'`, update lead status to `completed`
@@ -125,7 +125,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 15: Slot proposal count is at most 3** — for any `fc.array(slotArb, { minLength: 0, maxLength: 20 })`, assert the number of slots included in the proposal message is ≤ 3
     - **Validates: Requirements 6.4**
 
-  - [~] 6.8 Implement message send, persistence, and log write
+  - [x] 6.8 Implement message send, persistence, and log write
     - Send reply via existing LinkedIn send infrastructure (reuse pattern from `app/api/worker/route.ts`)
     - Persist sent message to `messages` table with `metadata: { source: 'ai_agent' }`
     - Write one record to `ai_automation_logs` for every job attempt (sent, skipped, or error)
@@ -136,11 +136,11 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 21: Execution log always written for every job attempt** — for any handler invocation result (`sent`, `skipped`, `error`), assert exactly one `ai_automation_logs` record is inserted with non-null `conversation_id`, `user_id`, `status`, and `created_at`
     - **Validates: Requirements 10.1**
 
-- [~] 7. Checkpoint — core library complete
+- [x] 7. Checkpoint — core library complete
   - Ensure all non-optional tests pass. Verify `lib/google/calendar-client.ts`, `lib/ai/prompt-builder.ts`, `lib/ai/slot-parser.ts`, and `lib/ai/conversation-handler.ts` compile without errors. Ask the user if questions arise.
 
-- [~] 8. Extend sync pipeline to enqueue AI reply jobs
-  - [~] 8.1 Add AI job enqueue logic to `syncMessagesForUser`
+- [x] 8. Extend sync pipeline to enqueue AI reply jobs
+  - [x] 8.1 Add AI job enqueue logic to `syncMessagesForUser`
     - In `lib/linkedin/message-sync.ts`, after inserting new inbound messages, check if the conversation has `ai_enabled = true` and `ai_status = 'active'`
     - If so, upsert a single `ai_reply_jobs` record with `status = 'pending'` using the partial unique index to enforce deduplication (one pending job per conversation)
     - Skip enqueue if `ai_status` is `paused` or `completed`
@@ -156,21 +156,21 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 8: Message history is always sorted ascending by sent_at** — for any `fc.array(fc.record({ sent_at: fc.date() }), { minLength: 1 })` inserted in arbitrary order, assert the array returned by the handler's fetch is strictly ascending by `sent_at`
     - **Validates: Requirements 4.1**
 
-- [~] 9. Extend worker to process AI reply jobs
-  - [~] 9.1 Add AI reply job polling to `app/api/worker/route.ts`
+- [x] 9. Extend worker to process AI reply jobs
+  - [x] 9.1 Add AI reply job polling to `app/api/worker/route.ts`
     - After the existing `action_queue` processing block, add a second block that queries `ai_reply_jobs` where `status = 'pending'` and `execute_at <= now`, ordered by `execute_at ASC`, limit 10
     - For each job: atomically claim it (`UPDATE ... SET status = 'processing' WHERE status = 'pending'`), acquire a Redis lock (`ai_reply_job:{jobId}`, TTL 5 min) via `lib/redis/lock-manager.ts`, call `processAIReplyJob`, release lock
     - Add a cleanup pass at worker startup: reset jobs stuck in `processing` for > 10 minutes back to `pending`
     - _Requirements: 3.1, 10.4_
 
-- [~] 10. API routes — AI automation config and Google OAuth
-  - [~] 10.1 Implement `GET /api/ai-automation/config`
+- [x] 10. API routes — AI automation config and Google OAuth
+  - [x] 10.1 Implement `GET /api/ai-automation/config`
     - Create `app/api/ai-automation/config/route.ts`
     - Require authenticated session; fetch `ai_automation_config` for the user (return defaults if not found)
     - Never return `gcal_refresh_token` in the response body; return `gcal_connected: boolean` instead
     - _Requirements: 1.4_
 
-  - [~] 10.2 Implement `PATCH /api/ai-automation/config`
+  - [x] 10.2 Implement `PATCH /api/ai-automation/config`
     - In the same route file, handle PATCH
     - Validate `meeting_duration_min` is between 15 and 120 inclusive; return 400 if not
     - Upsert `ai_automation_config` for the user
@@ -180,13 +180,13 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 2: Meeting duration validation is a closed interval** — for any `fc.integer()`, assert the validator accepts `d` iff `15 <= d <= 120`; values 14, 121, 0, negative, and very large must be rejected
     - **Validates: Requirements 1.2**
 
-  - [~] 10.4 Implement Google OAuth routes
+  - [x] 10.4 Implement Google OAuth routes
     - Create `app/api/ai-automation/google/connect/route.ts` — build Google OAuth authorization URL with `calendar` scope and redirect to it
     - Create `app/api/ai-automation/google/callback/route.ts` — exchange authorization code for tokens, store `refresh_token` in `ai_automation_config`, redirect to settings page
     - _Requirements: 1.3, 6.1_
 
-- [~] 11. API routes — conversation AI controls
-  - [~] 11.1 Implement `PATCH /api/ai-automation/conversations/[id]/toggle`
+- [x] 11. API routes — conversation AI controls
+  - [x] 11.1 Implement `PATCH /api/ai-automation/conversations/[id]/toggle`
     - Create `app/api/ai-automation/conversations/[id]/toggle/route.ts`
     - Require authenticated session and paid billing entitlement (return 402 for free plan)
     - When enabling: check `gcal_refresh_token` exists (return 400 if not); count inbound messages; set `ai_enabled = true`, `ai_status = 'active'` if inbound count > 0 else `'idle'`
@@ -197,56 +197,56 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 3: AI enable sets correct initial status** — for any `fc.record({ hasInbound: fc.boolean() })`, assert enabling AI sets `ai_status = 'active'` when `hasInbound = true` and `'idle'` when `hasInbound = false`
     - **Validates: Requirements 2.2**
 
-  - [~] 11.3 Implement `POST /api/ai-automation/conversations/[id]/takeover`
+  - [x] 11.3 Implement `POST /api/ai-automation/conversations/[id]/takeover`
     - Create `app/api/ai-automation/conversations/[id]/takeover/route.ts`
     - Atomically set `ai_status = 'paused'` and cancel pending jobs (`UPDATE ai_reply_jobs SET status = 'failed' WHERE conversation_id = ? AND status = 'pending'`) in a single transaction
     - _Requirements: 8.1, 8.2_
 
-  - [~] 11.4 Implement `POST /api/ai-automation/conversations/[id]/resume`
+  - [x] 11.4 Implement `POST /api/ai-automation/conversations/[id]/resume`
     - Create `app/api/ai-automation/conversations/[id]/resume/route.ts`
     - Set `ai_status = 'active'`; do NOT create jobs for messages that arrived during the paused period (only future inbound messages will trigger jobs)
     - _Requirements: 8.3, 8.5_
 
-  - [~] 11.5 Implement `GET /api/ai-automation/conversations/[id]/logs`
+  - [x] 11.5 Implement `GET /api/ai-automation/conversations/[id]/logs`
     - Create `app/api/ai-automation/conversations/[id]/logs/route.ts`
     - Require authenticated session; verify the conversation belongs to the requesting user
     - Return `ai_automation_logs` for the conversation ordered by `created_at DESC`
     - _Requirements: 10.3_
 
-  - [~] 11.6 Extend `POST /api/messages/send` to trigger takeover on manual send
+  - [x] 11.6 Extend `POST /api/messages/send` to trigger takeover on manual send
     - In `app/api/messages/send/route.ts`, after sending the message, if the conversation has `ai_status = 'active'`, atomically set `ai_status = 'paused'` and cancel pending AI jobs before returning
     - _Requirements: 8.1_
 
-- [~] 12. Billing webhook — pause AI on subscription downgrade
-  - [~] 12.1 Extend billing webhook to pause active AI conversations
+- [x] 12. Billing webhook — pause AI on subscription downgrade
+  - [x] 12.1 Extend billing webhook to pause active AI conversations
     - In `app/api/billing/webhook/route.ts`, when a subscription transitions to `inactive` or `canceled`, query all conversations for that user where `ai_status = 'active'` and bulk-update them to `ai_status = 'paused'`
     - _Requirements: 9.3_
 
-- [~] 13. Checkpoint — backend complete
+- [x] 13. Checkpoint — backend complete
   - Ensure all non-optional tests pass. Verify all API routes return correct status codes for auth, billing, and validation errors. Ask the user if questions arise.
 
-- [~] 14. MessagesInbox UI updates (`components/messages/MessagesInbox.tsx`)
-  - [~] 14.1 Extend conversation data types and fetch AI status
+- [x] 14. MessagesInbox UI updates (`components/messages/MessagesInbox.tsx`)
+  - [x] 14.1 Extend conversation data types and fetch AI status
     - Add `ai_enabled`, `ai_status` to the `ConversationSummary` and `ConversationDetails` local interfaces
     - Ensure the conversations API response includes these fields
     - _Requirements: 2.4_
 
-  - [~] 14.2 Add AI toggle control to conversation list item
+  - [x] 14.2 Add AI toggle control to conversation list item
     - In `ConvItem`, add a small toggle switch that calls `PATCH /api/ai-automation/conversations/[id]/toggle`
     - Show a loading spinner while the toggle request is in flight
     - _Requirements: 2.4_
 
-  - [~] 14.3 Add AI status indicator to chat header
+  - [x] 14.3 Add AI status indicator to chat header
     - In the chat header, display the current `ai_status` as a colored badge (`active` = green, `paused` = yellow, `error` = red, `completed` = gray)
     - When `ai_status = 'error'`, show a human-readable error description fetched from the latest `ai_automation_logs` entry
     - _Requirements: 2.4, 10.2_
 
-  - [~] 14.4 Add "Take over" and "Resume AI" buttons to chat header
+  - [x] 14.4 Add "Take over" and "Resume AI" buttons to chat header
     - When `ai_status = 'active'`: show "Take over" button that calls `POST /api/ai-automation/conversations/[id]/takeover`
     - When `ai_status = 'paused'`: show "Resume AI" button that calls `POST /api/ai-automation/conversations/[id]/resume`
     - _Requirements: 8.2, 8.3_
 
-  - [~] 14.5 Add AI message badge to `MessageBubble`
+  - [x] 14.5 Add AI message badge to `MessageBubble`
     - Extend `MessageItem` interface with `metadata?: { source?: string }`
     - In `MessageBubble`, when `msg.metadata?.source === 'ai_agent'`, render a small "AI" badge below the bubble timestamp
     - _Requirements: 2.5, 4.7_
@@ -255,14 +255,14 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 4: AI message indicator is always present for AI-sourced messages** — for any message record where `metadata.source === 'ai_agent'`, assert the rendered `MessageBubble` contains an AI indicator element; for any other source value, assert no indicator is rendered
     - **Validates: Requirements 2.5, 4.7**
 
-- [~] 15. Settings page UI for AI automation config (`app/dashboard/settings/page.tsx`)
-  - [~] 15.1 Add AI Automation section to settings page
+- [x] 15. Settings page UI for AI automation config (`app/dashboard/settings/page.tsx`)
+  - [x] 15.1 Add AI Automation section to settings page
     - Fetch `GET /api/ai-automation/config` on mount
     - Render form fields: persona (textarea), meeting objective (textarea), meeting duration (number input, 15–120), timezone (select), default AI enabled (toggle)
     - On save, call `PATCH /api/ai-automation/config`; show validation error if duration is out of range
     - _Requirements: 1.1, 1.2, 1.4_
 
-  - [~] 15.2 Add Google Calendar connection UI
+  - [x] 15.2 Add Google Calendar connection UI
     - Show "Connect Google Calendar" button that navigates to `GET /api/ai-automation/google/connect`
     - When `gcal_connected = true`, show "Connected" status and a "Disconnect" option
     - When `gcal_token_error = true`, show an error banner prompting the user to reconnect
@@ -272,7 +272,7 @@ Implement the AI-powered inbox automation layer on top of the existing LinkedIn 
     - **Property 1: Config round-trip preserves all fields** — for any valid `AIAutomationConfig` object written via the PATCH endpoint, assert reading it back via GET returns identical values for `persona`, `meeting_objective`, `meeting_duration_min`, `timezone`, `default_ai_enabled`, `gcal_token_error`
     - **Validates: Requirements 1.1**
 
-- [~] 16. Final checkpoint — Ensure all tests pass
+- [x] 16. Final checkpoint — Ensure all tests pass
   - Run the full test suite. Verify all property-based tests execute at least 100 iterations each. Ensure all non-optional sub-tasks are complete and integrated. Ask the user if questions arise.
 
 ## Notes

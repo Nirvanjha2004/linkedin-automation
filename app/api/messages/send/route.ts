@@ -117,6 +117,26 @@ export async function POST(request: Request) {
       .eq('id', conversationId)
       .eq('user_id', user.id);
 
+    // If AI is active for this conversation, pause it and cancel pending jobs
+    const { data: convAiState } = await supabase
+      .from('conversations')
+      .select('ai_status')
+      .eq('id', conversationId)
+      .single();
+
+    if (convAiState?.ai_status === 'active') {
+      await supabase
+        .from('conversations')
+        .update({ ai_status: 'paused' })
+        .eq('id', conversationId);
+
+      await supabase
+        .from('ai_reply_jobs')
+        .update({ status: 'failed' })
+        .eq('conversation_id', conversationId)
+        .eq('status', 'pending');
+    }
+
     return NextResponse.json({ success: true, message: inserted });
   } catch (err: unknown) {
     const error = err as Error;

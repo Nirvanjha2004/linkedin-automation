@@ -28,6 +28,8 @@ export async function GET(request: NextRequest) {
         unread_count,
         last_message_at,
         updated_at,
+        ai_enabled,
+        ai_status,
         leads!inner(id, full_name, first_name, last_name, profile_pic_url, status),
         linkedin_accounts!inner(id, name)
       `, { count: 'exact' })
@@ -92,6 +94,8 @@ export async function GET(request: NextRequest) {
         unread_count: conversation.unread_count,
         last_message_at: conversation.last_message_at,
         last_message_preview: lastMessage?.content_text ?? '',
+        ai_enabled: conversation.ai_enabled ?? false,
+        ai_status: conversation.ai_status ?? 'idle',
         lead: {
           id: lead?.id,
           name: leadName,

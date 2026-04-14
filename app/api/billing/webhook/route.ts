@@ -73,6 +73,15 @@ export async function POST(req: NextRequest) {
             current_period_end: item ? new Date(item.current_period_end * 1000).toISOString() : null,
           })
           .eq('user_id', sub.user_id);
+
+        // If subscription became inactive or canceled, pause all active AI conversations
+        if (stripeSub.status === 'canceled' || stripeSub.status === 'incomplete_expired') {
+          await supabase
+            .from('conversations')
+            .update({ ai_status: 'paused' })
+            .eq('user_id', sub.user_id)
+            .eq('ai_status', 'active');
+        }
         break;
       }
 
@@ -97,6 +106,13 @@ export async function POST(req: NextRequest) {
             grace_period_ends_at: null,
           })
           .eq('user_id', sub.user_id);
+
+        // Pause all active AI conversations for this user
+        await supabase
+          .from('conversations')
+          .update({ ai_status: 'paused' })
+          .eq('user_id', sub.user_id)
+          .eq('ai_status', 'active');
         break;
       }
 
