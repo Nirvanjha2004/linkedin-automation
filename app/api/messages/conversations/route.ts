@@ -34,7 +34,6 @@ export async function GET(request: NextRequest) {
         linkedin_accounts!inner(id, name)
       `, { count: 'exact' })
       .eq('user_id', user.id)
-      .eq('leads.status', 'message_sent')
       .order('last_message_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
