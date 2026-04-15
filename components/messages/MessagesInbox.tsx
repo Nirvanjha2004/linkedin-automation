@@ -370,6 +370,8 @@ export default function MessagesInbox() {
 
   const loadConversation = useCallback(async (id: string) => {
     setLoadingMessages(true);
+    // Optimistically clear the unread badge immediately
+    setConversations(prev => prev.map(c => c.id === id ? { ...c, unread_count: 0 } : c));
     try {
       const { data } = await axios.get(`/api/messages/conversations/${id}`);
       setActiveConversation(data.conversation);

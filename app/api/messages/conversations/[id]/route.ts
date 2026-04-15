@@ -35,6 +35,15 @@ export async function GET(
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }
 
+    // Reset unread count when conversation is opened
+    if ((conversation as any).unread_count > 0) {
+      await supabase
+        .from('conversations')
+        .update({ unread_count: 0 })
+        .eq('id', id)
+        .eq('user_id', user.id);
+    }
+
     const { data: messages, error: messageError } = await supabase
       .from('messages')
       .select('id, sender_type, direction, content_text, content_html, sent_at, external_message_id, metadata')
