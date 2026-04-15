@@ -9,6 +9,11 @@
  */
 
 import cron from 'node-cron';
+import { config } from 'dotenv';
+
+// Load .env / .env.local so NEXT_PUBLIC_APP_URL etc. are available
+config({ path: '.env.local' });
+config({ path: '.env' }); // fallback
 
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 const CRON_SECRET = process.env.CRON_SECRET || '';

@@ -797,7 +797,8 @@ export async function syncMessagesForUser(
 
           if (convAiState?.ai_enabled === true && convAiState?.ai_status === 'active') {
             const firstInboundRow = rowsToInsert.find((m) => m.direction === 'inbound');
-            await supabase
+            console.log(`[AI Agent] 📥 Inbound message detected in conversation ${local.id} — enqueuing AI reply job`);
+            const { error: upsertError } = await supabase
               .from('ai_reply_jobs')
               .upsert(
                 {
@@ -808,8 +809,15 @@ export async function syncMessagesForUser(
                   retry_count: 0,
                   execute_at: new Date().toISOString(),
                 },
-                { ignoreDuplicates: true }
+                { onConflict: 'conversation_id', ignoreDuplicates: true }
               );
+            if (upsertError) {
+              console.error(`[AI Agent] ❌ Failed to enqueue AI reply job for conversation ${local.id}:`, upsertError.message);
+            } else {
+              console.log(`[AI Agent] ✅ AI reply job enqueued for conversation ${local.id}`);
+            }
+          } else {
+            console.log(`[AI Agent] ⏭️  Skipping AI job enqueue for conversation ${local.id} — ai_enabled=${convAiState?.ai_enabled}, ai_status=${convAiState?.ai_status}`);
           }
         }
       }

@@ -145,6 +145,8 @@ export async function processAIReplyJob(
 ): Promise<AIHandlerResult> {
   const { jobId, conversationId, userId, triggerMessageId } = input;
 
+  console.log(`[AI Agent] 🤖 Processing job ${jobId} | conversation=${conversationId}`);
+
   // ── 6.1: Fetch conversation + guards ────────────────────────────────────────
 
   const { data: conversation, error: convError } = await supabase
@@ -165,6 +167,7 @@ export async function processAIReplyJob(
   }
 
   if (conversation.ai_status !== 'active') {
+    console.log(`[AI Agent] ⏭️  Skipping job ${jobId} — ai_status is '${conversation.ai_status}'`);
     await writeLog(supabase, {
       conversationId,
       userId,
@@ -179,6 +182,7 @@ export async function processAIReplyJob(
 
   const subscription = await getSubscription(userId);
   if (!isEffectivelyPaid(subscription)) {
+    console.log(`[AI Agent] ⏭️  Skipping job ${jobId} — user not on paid plan`);
     await writeLog(supabase, {
       conversationId,
       userId,
@@ -255,6 +259,7 @@ export async function processAIReplyJob(
   const currentStage = conversation.ai_booking_stage as AIBookingStage;
 
   if (outboundCount >= 5 && !hasInterest && currentStage === 'qualifying') {
+    console.log(`[AI Agent] 🛑 Closing conversation ${conversationId} — ${outboundCount} outbound msgs, no interest signal`);
     const closingMessage =
       'Thank you for your time! Feel free to reach out if you\'d like to connect in the future.';
 
@@ -298,6 +303,7 @@ export async function processAIReplyJob(
 
   if (currentStage === 'slot_proposal') {
     if (gcalRefreshToken) {
+      console.log(`[AI Agent] 📅 Fetching available calendar slots for conversation ${conversationId}`);
       try {
         const allSlots = await googleCalendarClient.getAvailableSlots({
           refreshToken: gcalRefreshToken,
@@ -305,6 +311,7 @@ export async function processAIReplyJob(
           timezone,
         });
         proposedSlots = allSlots.slice(0, 3);
+        console.log(`[AI Agent] 📅 Got ${allSlots.length} slots, proposing ${proposedSlots.length} to lead`);
       } catch (err: unknown) {
         const error = err as Error;
         if (error.message.includes('Token refresh failed')) {
@@ -487,7 +494,10 @@ export async function processAIReplyJob(
 
   const llmResult = await callLLM(prompt);
 
+  console.log(`[AI Agent] 🧠 LLM result for job ${jobId}: ${llmResult.type}`);
+
   if (llmResult.type === 'timeout' || llmResult.type === 'non_retryable') {
+    console.log(`[AI Agent] ❌ LLM error (${llmResult.type}) for job ${jobId}: ${llmResult.message}`);
     await supabase
       .from('conversations')
       .update({ ai_status: 'error' })
@@ -576,6 +586,10 @@ export async function processAIReplyJob(
   }
 
   const sendResult = await sendLinkedInMessage(supabase, conversation, generatedReply);
+
+  if (sendResult.success) {
+    console.log(`[AI Agent] ✅ Message sent to lead in conversation ${conversationId} | stage=${updatedStage} | preview="${generatedReply.slice(0, 80)}..."`);
+  }
 
   if (!sendResult.success) {
     await writeLog(supabase, {
