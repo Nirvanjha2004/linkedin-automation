@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
       .eq('status', 'queued')
       .lte('execute_at', currentTime.toISOString())
       .order('execute_at', { ascending: true })
-      .limit(20);
+      .limit(100);
 
     if (fetchError) throw fetchError;
 
