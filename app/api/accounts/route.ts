@@ -49,20 +49,25 @@ export async function GET() {
       }
     }
 
-    // ── Batch 2: daily_limit per account (min across active campaigns) ──────
+    // ── Batch 2: daily_limit per account (max across active campaigns) ──────
     const { data: campaignLimits } = await supabase
       .from('campaigns')
-      .select('linkedin_account_id, daily_limit')
+      .select('linkedin_account_id, daily_limit, user_id')
+      .eq('user_id', user.id)
       .in('linkedin_account_id', accountIds)
       .eq('status', 'active');
 
     const limitMap: Record<string, number> = {};
-    for (const id of accountIds) limitMap[id] = DEFAULT_DAILY_CONNECTION_LIMIT;
+    for (const id of accountIds) limitMap[id] = 0;
     for (const c of campaignLimits ?? []) {
       if (c.linkedin_account_id) {
-        limitMap[c.linkedin_account_id] = Math.min(
+        const campaignLimit =
+          typeof c.daily_limit === 'number' && c.daily_limit > 0
+            ? c.daily_limit
+            : DEFAULT_DAILY_CONNECTION_LIMIT;
+        limitMap[c.linkedin_account_id] = Math.max(
           limitMap[c.linkedin_account_id],
-          c.daily_limit ?? DEFAULT_DAILY_CONNECTION_LIMIT
+          campaignLimit
         );
       }
     }
@@ -71,7 +76,7 @@ export async function GET() {
     const enriched = accounts.map((a) => ({
       ...a,
       daily_invites_sent: sentTodayMap[a.id] ?? 0,
-      daily_limit: limitMap[a.id] ?? DEFAULT_DAILY_CONNECTION_LIMIT,
+      daily_limit: limitMap[a.id] > 0 ? limitMap[a.id] : DEFAULT_DAILY_CONNECTION_LIMIT,
     }));
 
     return NextResponse.json({ accounts: enriched });

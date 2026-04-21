@@ -150,12 +150,16 @@ export async function POST(request: NextRequest) {
           .eq('status', 'completed')
           .gte('executed_at', todayStart);
 
-        // Daily limit = lowest daily_limit across the account's active campaigns,
+        // Daily limit = highest valid daily_limit across the account's active campaigns,
         // falling back to the platform default (100) if not configured.
-        const dailyLimit = accountCampaigns.reduce(
-          (min, c) => Math.min(min, c.daily_limit ?? DEFAULT_DAILY_CONNECTION_LIMIT),
-          DEFAULT_DAILY_CONNECTION_LIMIT
-        );
+        const maxCampaignLimit = accountCampaigns.reduce((max, c) => {
+          const campaignLimit =
+            typeof c.daily_limit === 'number' && c.daily_limit > 0
+              ? c.daily_limit
+              : 0;
+          return Math.max(max, campaignLimit);
+        }, 0);
+        const dailyLimit = maxCampaignLimit > 0 ? maxCampaignLimit : DEFAULT_DAILY_CONNECTION_LIMIT;
 
         const dailyLimitReached = (connectionsSentToday ?? 0) >= dailyLimit;
 
