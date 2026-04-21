@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
 /** Platform default — matches the constant in scheduler-v2 */
-const DEFAULT_DAILY_CONNECTION_LIMIT = 20;
+const DEFAULT_DAILY_CONNECTION_LIMIT = 100;
 
 // GET /api/accounts - List LinkedIn accounts with live daily invite stats
 export async function GET() {
@@ -32,7 +32,7 @@ export async function GET() {
 
     // ── Batch 1: count completed connection_requests today per account ──────
     // Fetch all matching rows and count in JS — Supabase doesn't expose GROUP BY,
-    // but this is fine since a user typically has fewer than 20 accounts.
+    // but this is fine since account counts are typically small.
     const { data: todayActions } = await supabase
       .from('action_queue')
       .select('account_id')

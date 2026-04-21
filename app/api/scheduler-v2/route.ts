@@ -9,7 +9,7 @@ const MAX_DELAY_MS = 90 * 1000;
  * LinkedIn's rolling daily connection-request limit per account.
  * Accounts can be restricted if this is exceeded — keep it conservative.
  */
-const DEFAULT_DAILY_CONNECTION_LIMIT = 20;
+const DEFAULT_DAILY_CONNECTION_LIMIT = 100;
 
 function randomDelayMs(): number {
   return Math.floor(Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS + 1)) + MIN_DELAY_MS;
@@ -151,7 +151,7 @@ export async function POST(request: NextRequest) {
           .gte('executed_at', todayStart);
 
         // Daily limit = lowest daily_limit across the account's active campaigns,
-        // falling back to the platform default (20) if not configured.
+        // falling back to the platform default (100) if not configured.
         const dailyLimit = accountCampaigns.reduce(
           (min, c) => Math.min(min, c.daily_limit ?? DEFAULT_DAILY_CONNECTION_LIMIT),
           DEFAULT_DAILY_CONNECTION_LIMIT

@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
         },
         message_templates: message_templates || {},
         priority: priority || 1,
-        daily_limit: daily_limit || 20,
+        daily_limit: daily_limit || 100,
         total_limit: total_limit || null,
         status: 'draft',
         actions_today: 0,

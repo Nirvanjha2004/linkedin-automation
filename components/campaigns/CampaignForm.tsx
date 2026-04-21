@@ -33,7 +33,7 @@ export default function CampaignForm({ campaign, onSuccess }: CampaignFormProps)
   const [description, setDescription] = useState(campaign?.description || '');
   const [linkedinAccountId, setLinkedinAccountId] = useState(campaign?.linkedin_account_id || '');
   const [priority, setPriority] = useState(campaign?.priority || 1);
-  const [dailyLimit, setDailyLimit] = useState(campaign?.daily_limit || 20);
+  const [dailyLimit, setDailyLimit] = useState(campaign?.daily_limit || 100);
   const [schedule, setSchedule] = useState(campaign?.schedule || DEFAULT_SCHEDULE);
   const [templates, setTemplates] = useState(campaign?.message_templates || {
     connection_request: '', initial_message: '', follow_up_1: '', follow_up_2: '', follow_up_delay_days: 3,

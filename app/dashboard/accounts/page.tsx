@@ -217,7 +217,7 @@ function AccountsContent() {
                       : <XCircle className="h-4 w-4 text-red-400 shrink-0" />}
                   </div>
 
-                  <DailyInviteBar sent={account.daily_invites_sent ?? 0} limit={account.daily_limit ?? 20} />
+                  <DailyInviteBar sent={account.daily_invites_sent ?? 0} limit={account.daily_limit ?? 100} />
 
                   <div className="flex items-center justify-between mt-3 pt-3 border-t border-zinc-100">
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ring-1 ring-inset ${account.is_active ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-red-50 text-red-600 ring-red-200'}`}>
