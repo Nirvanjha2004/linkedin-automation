@@ -42,7 +42,7 @@ export default function Sidebar() {
             <Zap className="h-4 w-4 text-white" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-zinc-900 leading-none">OutreachAI</p>
+            <p className="text-sm font-semibold text-zinc-900 leading-none">OutreachIQ</p>
             <p className="text-[11px] text-zinc-400 mt-0.5 leading-none">LinkedIn Automation</p>
           </div>
         </Link>

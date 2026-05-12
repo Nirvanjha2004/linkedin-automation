@@ -6,7 +6,7 @@ export default function NewCampaignPage() {
     <div>
       <Header
         title="Create Campaign"
-        subtitle="Set up a new LinkedIn outreach campaign"
+        subtitle="Set up a new LinkedIn Referral campaign"
       />
       <div className="p-8 max-w-3xl">
         <CampaignForm />

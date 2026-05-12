@@ -35,7 +35,7 @@ export default function RegisterPage() {
           <Zap className="h-5 w-5 text-white" />
         </div>
         <h1 className="text-xl font-semibold text-zinc-900">Create account</h1>
-        <p className="text-sm text-zinc-500 mt-1">Start automating your LinkedIn outreach</p>
+        <p className="text-sm text-zinc-500 mt-1">Start automating your LinkedIn and get Referrals</p>
       </div>
 
       <form onSubmit={handleRegister} className="space-y-4">

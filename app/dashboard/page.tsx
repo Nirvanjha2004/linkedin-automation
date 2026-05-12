@@ -118,7 +118,7 @@ export default function DashboardPage() {
     <div>
       <PageHeader
         title="Overview"
-        subtitle="Your LinkedIn outreach at a glance"
+        subtitle="Your referral engine for dream companies."
         actions={
           <Link href="/dashboard/campaigns/new" className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors">
             <Plus className="h-4 w-4" />
