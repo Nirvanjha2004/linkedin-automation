@@ -3,7 +3,6 @@
 A production-grade LinkedIn outreach automation platform built with Next.js. Automate connection requests, follow-up sequences, and AI-powered lead qualification with meeting booking — all from a single dashboard.
 
 ---
-
 ## Features
 
 ### Campaign Management
