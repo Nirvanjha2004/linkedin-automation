@@ -784,42 +784,6 @@ export async function syncMessagesForUser(
               'connected',
             ]);
         }
-
-        // ── AI reply job enqueue ──────────────────────────────────────────────────────
-        // If any newly inserted messages are inbound, check if this conversation has
-        // ai_enabled = true and ai_status = 'active'. If so, upsert a pending AI reply job.
-        if (hasInbound) {
-          const { data: convAiState } = await supabase
-            .from('conversations')
-            .select('ai_enabled, ai_status')
-            .eq('id', local.id)
-            .maybeSingle();
-
-          if (convAiState?.ai_enabled === true && convAiState?.ai_status === 'active') {
-            const firstInboundRow = rowsToInsert.find((m) => m.direction === 'inbound');
-            console.log(`[AI Agent] 📥 Inbound message detected in conversation ${local.id} — enqueuing AI reply job`);
-            const { error: upsertError } = await supabase
-              .from('ai_reply_jobs')
-              .upsert(
-                {
-                  conversation_id: local.id,
-                  user_id: userId,
-                  trigger_message_id: firstInboundRow!.external_message_id,
-                  status: 'pending',
-                  retry_count: 0,
-                  execute_at: new Date().toISOString(),
-                },
-                { onConflict: 'conversation_id', ignoreDuplicates: true }
-              );
-            if (upsertError) {
-              console.error(`[AI Agent] ❌ Failed to enqueue AI reply job for conversation ${local.id}:`, upsertError.message);
-            } else {
-              console.log(`[AI Agent] ✅ AI reply job enqueued for conversation ${local.id}`);
-            }
-          } else {
-            console.log(`[AI Agent] ⏭️  Skipping AI job enqueue for conversation ${local.id} — ai_enabled=${convAiState?.ai_enabled}, ai_status=${convAiState?.ai_status}`);
-          }
-        }
       }
 
       await supabase

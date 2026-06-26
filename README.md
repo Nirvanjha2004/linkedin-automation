@@ -1,70 +1,14 @@
-# LinkedIn Automation Platform
+# OutreachIQ: LinkedIn Automation Platform
 
-A production-grade LinkedIn outreach automation platform built with Next.js. Automate connection requests, follow-up sequences, and AI-powered lead qualification with meeting booking — all from a single dashboard.
-
----
-
-## Features
-
-### Campaign Management
-- Create multi-step outreach campaigns with connection request notes, initial messages, and up to two follow-ups
-- Personalize messages with dynamic placeholders: `{{first_name}}`, `{{last_name}}`, `{{company}}`, `{{title}}`
-- Configure per-campaign daily limits, operational time windows, days of week, and timezone
-- Campaign states: draft → active → paused → completed
-
-### Lead Management
-- Bulk import leads via CSV (LinkedIn URLs auto-enriched with name, company, title, headline, location, profile picture)
-- Full lead lifecycle tracking: `pending → connection_sent → connected → message_sent → replied → followup_sent → completed/failed`
-- Filter by status, campaign, or search by name/company
-- Add notes and tags to individual leads
-
-### Messaging & Conversations
-- Sync LinkedIn conversations from all connected accounts
-- Full conversation thread view with date separators and unread counts
-- Rich text message editor (bold, italic, underline, lists, links)
-- All messages persisted locally in Supabase with source metadata (`ui_send`, `worker_send`, `ai_agent`)
-
-### AI Automation (Meeting Booking)
-- Configurable AI persona and meeting objective
-- Automatically detects interest signals in lead replies
-- Proposes available Google Calendar slots and books confirmed meetings
-- Booking stages: `qualifying → slot_proposal → slot_confirmation → done`
-- User can pause, take over, or resume AI automation per conversation
-- Full interaction logging for audit and debugging
-
-### Account Management
-- Connect multiple LinkedIn accounts via Unipile OAuth
-- Track active/inactive account status
-- Supports multiple accounts per user (paid feature)
-
-### Billing & Subscriptions
-- Free plan: 1 campaign, 50 leads, 1 LinkedIn account
-- Paid plan: unlimited campaigns/leads, additional accounts at $10/account/month
-- Stripe-powered checkout, customer portal, and webhook handling
-- 3-day grace period on past-due subscriptions
+A production-grade LinkedIn outreach automation platform built with Next.js. Automate connection requests, follow-up sequences, and lead tracking from a single, unified dashboard.
 
 ---
 
-## Tech Stack
+## Architecture Overview & Decisions
 
-| Layer | Technology |
-|---|---|
-| Framework | Next.js 16.1.6 (App Router) |
-| UI | React 19, Tailwind CSS 4, Radix UI |
-| Database | Supabase (PostgreSQL + Auth) |
-| Cache / Queue | Upstash Redis + QStash |
-| Payments | Stripe |
-| LinkedIn | Unipile SDK + direct Voyager API |
-| AI / LLM | Groq (`llama-3.3-70b-versatile`) |
-| Calendar | Google Calendar API v3 (OAuth 2.0) |
-| Forms | React Hook Form + Zod |
-| Charts | Recharts |
+The architecture of OutreachIQ is designed around reliability, scalability, and asynchronous background processing to adhere safely to LinkedIn's limits.
 
----
-
-## Architecture Overview
-
-```
+```text
 ┌─────────────────────────────────────────────────────┐
 │                   Next.js App Router                │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────┐ │
@@ -80,31 +24,75 @@ A production-grade LinkedIn outreach automation platform built with Next.js. Aut
 │  + RLS policies │  │  │ Scheduler  │ │   Worker   │  │
 └─────────────────┘  │  │ (3 min)    │ │ (30 sec)   │  │
                      │  └────────────┘ └────────────┘  │
-┌─────────────────┐  │  ┌────────────────────────────┐ │
-│  Upstash Redis  │  │  │     AI Reply Jobs          │ │
-│  (locks/cache)  │  │  │  (Groq + Google Calendar)  │ │
-└─────────────────┘  │  └────────────────────────────┘ │
-                     └─────────────────────────────────┘
+┌─────────────────┐  └─────────────────────────────────┘
+│  Upstash Redis  │
+│  (distributed   │
+│   locking)      │
+└─────────────────┘
          │
          ▼
 ┌─────────────────────────────────────────────────────┐
 │               External Integrations                 │
-│   LinkedIn (Unipile + Voyager)  │  Stripe  │  Groq  │
+│         LinkedIn (Custom / Unipile)  │  Stripe      │
 └─────────────────────────────────────────────────────┘
 ```
 
-### Background Job Flow
+### 1. Next.js App Router (Full Stack Framework)
+**Why?** Next.js App Router allows us to co-locate our React frontend with our backend API routes. This reduces infrastructure complexity since Vercel seamlessly provisions serverless functions for both. React Server Components and Server Actions reduce client-side Javascript, making the dashboard fast and SEO-friendly.
 
-**Scheduler** (every 3 minutes via Vercel Cron):
-1. Picks one action per account respecting operational windows and daily limits
-2. Priority: connection requests → initial messages → follow-up 1 → follow-up 2
-3. Atomically claims leads to prevent double-queuing
+### 2. Supabase (PostgreSQL & Auth)
+**Why?** 
+- **Database:** PostgreSQL handles our complex relational data (`users` -> `campaigns` -> `leads` -> `action_queue`).
+- **Action Queue:** We use a database-backed queue (`action_queue` table) instead of purely an in-memory queue like Redis. This ensures persistence, allows us to query pending items by scheduled execution time (`execute_at`), easily build UI dashboards for pending tasks, and implement multi-day exponential backoffs without memory bloat.
+- **Security:** Row Level Security (RLS) is applied at the database layer. This ensures multi-tenant data isolation; even if there is a bug in the application logic, a user cannot query another user's campaigns or leads.
 
-**Worker** (every 30 seconds via Vercel Cron):
-1. Executes queued actions (connection requests, messages, follow-ups)
-2. Enriches lead profiles from LinkedIn data
-3. Retries with exponential backoff (up to 3 attempts)
-4. Processes AI reply jobs with Redis-based distributed locking
+### 3. Asynchronous "Hybrid" Job Processing (Scheduler & Worker)
+**Why?** LinkedIn has strict rate limits and unpredictable network delays. Long-running tasks easily exceed serverless function timeouts.
+- **The Scheduler (`/api/scheduler-v2`):** Runs every 3 minutes. It evaluates active campaigns, checks operational time windows (e.g., 9 AM - 5 PM on weekdays), enforces daily connection limits, and calculates the exact timestamp for the next connection/message, injecting it into the `action_queue`.
+- **The Worker (`/api/worker`):** Runs every 30-60 seconds. It only fetches rows from `action_queue` where `execute_at <= NOW()`. It executes the API call to LinkedIn. If it fails, it increments the retry count and pushes the `execute_at` into the future (exponential backoff). This decoupling ensures UI interactions remain instant.
+
+### 4. Database Message Synchronization (`/api/messages/sync`)
+**Why?** Querying LinkedIn's native messaging API in real time via the browser is slow, highly rate-limited, and doesn't allow cross-referencing with our campaign leads. 
+Instead, a background task synchronizes inbound and outbound LinkedIn messages into our local `messages` and `conversations` tables. This ensures instant load times in our Inbox UI, and crucially, allows us to detect when a lead has replied so the scheduler can automatically pause automated follow-ups.
+
+### 5. Upstash Redis & QStash
+**Why?** We use Redis for highly available distributed locks. When the cron worker wakes up, multiple serverless instances could accidentally fire at once. Redis locks ensure that a specific lead or campaign is only processed by a single worker thread at a time, preventing embarrassing double-sends on LinkedIn.
+
+### 6. Unipile & Custom LinkedIn Clients
+**Why?** Managing direct headless browser sessions in a serverless environment is heavy and brittle. We interact with LinkedIn using a custom API wrapper (leveraging valid `li_at` / `jsessionid` cookies) and Unipile SDK integrations to manage session state securely and perform lightweight HTTP requests mimicking the native Voyager API.
+
+---
+
+## Core Features
+
+### Campaign Management
+- Create multi-step outreach campaigns with connection request notes, initial messages, and up to two follow-ups.
+- Personalize messages with dynamic placeholders: `{{first_name}}`, `{{last_name}}`, `{{company}}`, `{{title}}`.
+- Configure per-campaign daily limits, operational time windows, days of week, and timezone.
+- Campaign states: draft → active → paused → completed.
+
+### Lead Management
+- Bulk import leads via CSV (LinkedIn URLs auto-enriched with name, company, title, headline, location, profile picture).
+- Full lead lifecycle tracking: `pending → connection_sent → connected → message_sent → replied → followup_sent → completed/failed`.
+- Filter by status, campaign, or search by name/company.
+- Add notes and tags to individual leads.
+
+### Messaging & Conversations
+- Sync LinkedIn conversations from all connected accounts locally.
+- Full conversation thread view with date separators and unread counts.
+- Rich text message editor (bold, italic, underline, lists, links) inside the app.
+- All messages persisted locally in Supabase with source metadata.
+
+### Account Management
+- Connect multiple LinkedIn accounts.
+- Track active/inactive account status with automatic cookie refreshing handling.
+- Supports multiple accounts per user (paid feature).
+
+### Billing & Subscriptions
+- Free plan: 1 campaign, 50 leads, 1 LinkedIn account.
+- Paid plan: unlimited campaigns/leads, additional accounts at $10/account/month.
+- Stripe-powered checkout, customer portal, and webhook handling.
+- 3-day grace period on past-due subscriptions.
 
 ---
 
@@ -116,9 +104,7 @@ A production-grade LinkedIn outreach automation platform built with Next.js. Aut
 - A [Supabase](https://supabase.com) project
 - An [Upstash](https://upstash.com) Redis database
 - A [Stripe](https://stripe.com) account
-- A [Groq](https://console.groq.com) API key
 - A [Unipile](https://unipile.com) account (for LinkedIn OAuth)
-- Google Cloud project with Calendar API enabled
 
 ### Installation
 
@@ -134,7 +120,7 @@ Create a `.env` file in the project root:
 
 ```env
 # App
-NEXT_PUBLIC_APP_URL=http://localhost:3001
+NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 # Supabase
 NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
@@ -150,21 +136,14 @@ STRIPE_SECRET_KEY=sk_test_...
 STRIPE_PRICE_ID=price_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 
-# Groq (LLM)
-GROQ_API_KEY=gsk_...
-
-# Google OAuth (Calendar)
-GOOGLE_CLIENT_ID=<client-id>
-GOOGLE_CLIENT_SECRET=<client-secret>
-
-# Unipile (LinkedIn OAuth)
+# Unipile (LinkedIn Auth)
 UNIPILE_DSN=<dsn>
 UNIPILE_API_KEY=<api-key>
 
 # Cron Security
 CRON_SECRET=<random-secret>
 
-# LinkedIn Voyager API (optional, for direct API)
+# LinkedIn Voyager API (optional)
 LINKEDIN_MESSENGER_MESSAGES_QUERY_ID=<query-id>
 LINKEDIN_PROFILE_QUERY_ID=<query-id>
 ```
@@ -175,141 +154,13 @@ LINKEDIN_PROFILE_QUERY_ID=<query-id>
 npm run dev
 ```
 
-Open [http://localhost:3001](http://localhost:3001) in your browser.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 To run the cron jobs locally:
 
 ```bash
 npm run cron
 ```
-
----
-
-## Project Structure
-
-```
-├── app/
-│   ├── (auth)/              # Login & register pages
-│   ├── api/                 # API route handlers
-│   │   ├── accounts/        # LinkedIn account management
-│   │   ├── ai-automation/   # AI config, Google Calendar OAuth, conversation control
-│   │   ├── billing/         # Stripe checkout, portal, webhooks
-│   │   ├── campaigns/       # Campaign CRUD
-│   │   ├── leads/           # Lead CRUD + CSV upload
-│   │   ├── messages/        # Conversations, send, sync
-│   │   ├── scheduler-v2/    # Action scheduling cron endpoint
-│   │   └── worker/          # Action execution cron endpoint
-│   └── dashboard/           # Dashboard pages (campaigns, leads, messages, etc.)
-│
-├── components/
-│   ├── billing/             # UpgradeModal
-│   ├── campaigns/           # CampaignForm
-│   ├── leads/               # LeadTable, LeadDrawer, CSVUploader
-│   ├── messages/            # MessagesInbox
-│   └── ui/                  # Shared UI primitives (badge, button, etc.)
-│
-├── lib/
-│   ├── ai/                  # Conversation handler, prompt builder, slot parser
-│   ├── billing/             # Plan constants, entitlement checks
-│   ├── google/              # Google Calendar client
-│   ├── linkedin/            # Voyager API client, message sync
-│   ├── redis/               # Upstash client, distributed lock manager
-│   ├── scheduler/           # Message personalizer, time window calculator
-│   ├── supabase/            # Browser, server, and admin Supabase clients
-│   └── unipile/             # Unipile SDK wrapper
-```
-
----
-
-## API Reference
-
-### Campaigns
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/campaigns` | List all campaigns |
-| POST | `/api/campaigns` | Create a campaign |
-| GET | `/api/campaigns/[id]` | Get campaign details |
-| PATCH | `/api/campaigns/[id]` | Update a campaign |
-
-### Leads
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/leads` | List leads (paginated, filterable) |
-| POST | `/api/leads` | Create a lead |
-| POST | `/api/leads/upload` | Bulk CSV upload |
-| PATCH | `/api/leads/[id]` | Update lead (notes, tags) |
-| DELETE | `/api/leads/[id]` | Delete a lead |
-
-### Messages
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/messages/conversations` | List conversations |
-| GET | `/api/messages/conversations/[id]` | Get conversation + messages |
-| POST | `/api/messages/send` | Send a message |
-| POST | `/api/messages/sync` | Sync messages from LinkedIn |
-
-### Accounts
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/accounts` | List connected LinkedIn accounts |
-| POST | `/api/accounts/connect` | Initiate Unipile OAuth flow |
-| POST | `/api/accounts/link` | Complete OAuth callback |
-| POST | `/api/accounts/sync` | Sync account details |
-| PATCH | `/api/accounts/[id]` | Update account |
-
-### AI Automation
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/ai-automation/config` | Get AI config |
-| PATCH | `/api/ai-automation/config` | Update AI config |
-| GET | `/api/ai-automation/conversations/[id]/logs` | Get AI interaction logs |
-| POST | `/api/ai-automation/conversations/[id]/toggle` | Enable/disable AI for conversation |
-| POST | `/api/ai-automation/conversations/[id]/takeover` | User takes over conversation |
-| POST | `/api/ai-automation/conversations/[id]/resume` | Resume AI automation |
-| POST | `/api/ai-automation/google/connect` | Initiate Google Calendar OAuth |
-| POST | `/api/ai-automation/google/callback` | Google Calendar OAuth callback |
-
-### Billing
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/billing/status` | Get subscription status + estimated invoice |
-| POST | `/api/billing/checkout` | Create Stripe checkout session |
-| GET | `/api/billing/portal` | Redirect to Stripe customer portal |
-| POST | `/api/billing/webhook` | Stripe webhook handler |
-
-### Background Jobs (Cron)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/scheduler-v2` | Schedule next actions per account |
-| POST | `/api/worker` | Execute queued actions |
-| POST | `/api/check-connections` | Batch check for accepted connections |
-
-All cron endpoints require the `Authorization: Bearer <CRON_SECRET>` header.
-
----
-
-## Billing Plans
-
-| Feature | Free | Paid |
-|---------|------|------|
-| Campaigns | 1 | Unlimited |
-| Leads | 50 | Unlimited |
-| LinkedIn Accounts | 1 | Multiple |
-| AI Automation | ✓ | ✓ |
-| Message Templates | ✓ | ✓ |
-| Price | Free | $10/account/month |
-
-Subscriptions are managed via Stripe. The first LinkedIn account is included; additional accounts are billed at $10/month each. Peak account count is tracked for billing purposes.
-
----
-
-## Authentication
-
-- **User auth**: Supabase Auth with Google OAuth
-- **LinkedIn accounts**: OAuth via Unipile hosted auth flow
-- **Google Calendar**: OAuth 2.0 with refresh token storage (access tokens are never persisted)
-- **Row-Level Security**: All user data is filtered by `user_id` at the database level
-- **Cron jobs**: Protected via `CRON_SECRET` header validation
 
 ---
 
@@ -333,26 +184,6 @@ Subscriptions are managed via Stripe. The first LinkedIn account is included; ad
 
 4. Set up Stripe webhook pointing to `https://<your-domain>/api/billing/webhook`
 5. Set up Unipile webhook/callback pointing to `https://<your-domain>/api/accounts/link`
-6. Set up Google OAuth redirect URI to `https://<your-domain>/api/ai-automation/google/callback`
-
-### Build
-
-```bash
-npm run build
-npm run start
-```
-
----
-
-## Scripts
-
-| Script | Description |
-|--------|-------------|
-| `npm run dev` | Start development server |
-| `npm run build` | Build for production |
-| `npm run start` | Start production server |
-| `npm run lint` | Run ESLint |
-| `npm run cron` | Run cron jobs locally |
 
 ---
 
